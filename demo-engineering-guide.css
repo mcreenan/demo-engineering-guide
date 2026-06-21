@@ -179,6 +179,16 @@ a:hover { color: var(--accent-hover); }
   font-size: 14px;
   color: var(--text-secondary);
 }
+.toc-colophon {
+  margin-top: 24px;
+  padding: 16px 24px 0;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-secondary);
+}
+.toc-colophon a { color: var(--text-secondary); text-decoration: underline; text-underline-offset: 2px; }
+.toc-colophon a:hover { color: var(--accent); }
 
 .toc-overlay {
   display: none;
@@ -468,7 +478,7 @@ tbody tr:last-child td { border-bottom: none; }
 
 /* ── GitHub repo reference ──
    Use: <a class="gh-repo" data-repo="tasmania"></a>
-   JS fills the href (github.com/everwise/<repo>), the GitHub icon, and label. */
+   JS fills the href (github.com/<org>/<repo>), the GitHub icon, and label. */
 .gh-repo {
   color: var(--accent);
   text-decoration: none;
@@ -482,7 +492,7 @@ tbody tr:last-child td { border-bottom: none; }
    Use: <a class="ident" data-type="class|method|module|constant"
            data-repo="REPO" data-path="path/to/file.rb">Name</a>
    JS prepends the type badge, wraps the name, and fills the GitHub link
-   (github.com/everwise/REPO/blob/HEAD/path, new tab). data-path is optional —
+   (github.com/<org>/REPO/blob/HEAD/path, new tab). data-path is optional —
    omit it to link to the repo root. This is for code SYMBOLS only; plain
    <code> stays for file paths, shell commands, config values, env vars. */
 .ident {
