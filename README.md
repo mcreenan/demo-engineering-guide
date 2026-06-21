@@ -1,7 +1,7 @@
 # Demo Engineering Guide
 
 A living engineering guide for Demo Co, built with
-[palimpsest](https://www.npmjs.com/package/palimpsest). It renders as a
+[palimpsest](https://github.com/mcreenan/palimpsest). It renders as a
 self-contained HTML page with a two-level table of contents, scrollspy
 navigation, section filtering, pan/zoom Mermaid diagrams, linked repo & code
 references, and an in-page **"Suggest a change"** flow.
