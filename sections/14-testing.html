@@ -1,0 +1,87 @@
+<p class="lead annotatable">We test with <code>vitest</code> across every workspace, in both the backend and frontend repos. Run the suite locally before you push; CI runs it on every push to <code>main</code>, and a red build never deploys.</p>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">In short</span>One runner everywhere (vitest, ^1.6.0). Locally: <code>make test</code> in platform, <code>pnpm test</code> in web. In CI: the deploy pipeline&rsquo;s <code>test</code> job gates build and deploy. Tests come with the change, and &ldquo;tests pass and are covered&rdquo; is the first item on the merge bar.</div>
+</div>
+
+<p class="annotatable">The same runner spans all three repos &mdash; <a class="gh-repo" data-repo="platform"></a>, <a class="gh-repo" data-repo="web"></a>, and <a class="gh-repo" data-repo="infra"></a> (which owns the CI workflow). Both code repos require Node 20 or newer.</p>
+
+<h3>The test runner</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/package.json</a>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web/package.json</a>
+</div>
+<p class="annotatable">There is exactly one test runner to learn: vitest, pinned to <code>^1.6.0</code> as a devDependency in both repos. In every case the underlying command is <code>vitest run</code>, so <code>npx vitest run</code> works directly in any workspace if you want to skip the wrapper script.</p>
+
+<h3>Running tests locally</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/Makefile</a>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web/package.json</a>
+</div>
+<p class="annotatable">Each repo wraps the runner in the command that fits its toolchain. Both run the suite across all of that repo&rsquo;s workspaces.</p>
+<div class="table-wrapper"><table>
+  <thead><tr><th>Repo</th><th>Command</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><a class="gh-repo" data-repo="platform"></a></td><td><code>make test</code></td><td>Runs <code>npx vitest run</code> across all service workspaces (also the npm script <code>test</code>).</td></tr>
+    <tr><td><a class="gh-repo" data-repo="web"></a></td><td><code>pnpm test</code></td><td>Runs <code>vitest run</code> across the web workspaces.</td></tr>
+    <tr><td>either</td><td><code>npx vitest run</code></td><td>The underlying command both wrappers call.</td></tr>
+  </tbody>
+</table></div>
+
+<div class="codeblock"><pre><code><span class="cb-comment"># platform</span>
+make test
+
+<span class="cb-comment"># web</span>
+pnpm test
+
+<span class="cb-comment"># either, directly</span>
+npx vitest run</code></pre></div>
+
+<p class="annotatable">These commands are introduced alongside the rest of the local workflow in <a href="#local-development">Local Development</a>. For where vitest fits in the backend toolchain (next to <code>tsc --build</code> and <code>eslint</code>), see <a href="#backend-development">Backend Development</a>; the frontend equivalent lives in <a href="#frontend-development">Frontend Development</a>.</p>
+
+<h3>Tests in CI</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra/.github/workflows/deploy.yml</a>
+  <a data-kind="wiki">Release &amp; deployment (wiki article 1003)</a>
+</div>
+<p class="annotatable">The deploy pipeline in <a class="gh-repo" data-repo="infra"></a> begins with a <code>test</code> job that installs dependencies and runs the suite across the platform workspaces, on Node 20.</p>
+<dl>
+  <dt>Command</dt>
+  <dd><code>npm ci</code> then <code>npm test</code>.</dd>
+  <dt>Triggers</dt>
+  <dd>Every push to <code>main</code> and every <code>v*</code> tag.</dd>
+  <dt>Gating</dt>
+  <dd>The <code>build-and-push</code> job declares <code>needs: test</code>, and <code>deploy</code> declares <code>needs: build-and-push</code> &mdash; so a failing test job stops the pipeline before any image is built or shipped. A red build never deploys.</dd>
+</dl>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">The test gate</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart LR
+  A["push to main<br/>or v* tag"] --> B["CI: test job<br/>npm test"]
+  B --> C{"tests pass?"}
+  C -->|yes| D["build-and-push"]
+  D --> E["deploy"]
+  C -->|no| F["red build<br/>pipeline stops"]</pre></div>
+</div>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Scope of the CI gate</span>The pipeline described here runs the platform test suite. The full build-and-deploy story &mdash; staging soak, tagged production releases, and rollback &mdash; is owned by <a href="#release-and-deployment">Release &amp; Deployment</a>.</div>
+</div>
+
+<h3>Expectations</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Code review (wiki article 1005)</a>
+</div>
+<p class="annotatable">Testing is an author responsibility, not a follow-up task.</p>
+<ul>
+  <li><strong>Tests come with the change.</strong> Write them as part of the PR and self-review your own diff first.</li>
+  <li><strong>&ldquo;Tests pass and are covered&rdquo;</strong> is the first item on the bar to merge &mdash; see <a href="#code-review">Code Review &amp; Pull Requests</a>.</li>
+  <li><strong>Reviewers check tests.</strong> They review for correctness, clarity, tests, and fit.</li>
+</ul>
+
+<div class="panel tip">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 10.5 8.5 14 15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Run it before you push</span>CI runs the same <code>vitest run</code> you do, so a local <code>make test</code> or <code>pnpm test</code> catches a red build before it reaches the pipeline.</div>
+</div>

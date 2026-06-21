@@ -1,0 +1,118 @@
+<p class="lead annotatable">Run the whole stack locally with two commands: <code>make dev</code> in <a class="gh-repo" data-repo="platform"></a> (migrates, seeds, then starts every backend service with hot reload) and <code>pnpm dev</code> in <a class="gh-repo" data-repo="web"></a> (runs the dashboard on port 3000 and the admin app on port 3001).</p>
+
+<ul>
+  <li><strong>Prerequisites.</strong> Node &gt;= 20, a local Postgres, and the <code>DATABASE_URL</code> env var. <a class="gh-repo" data-repo="web"></a> also needs pnpm (pinned <code>pnpm@9.1.0</code>).</li>
+  <li><strong>Backend.</strong> <code>make dev</code> brings up all services against a seeded local Postgres with hot reload.</li>
+  <li><strong>Frontend.</strong> <code>pnpm install</code> then <code>pnpm dev</code> runs every app in parallel; the apps expect the gateway at <code>NEXT_PUBLIC_API_URL</code> (defaults to <code>http://localhost:3000</code>).</li>
+  <li><strong>Fresh laptop?</strong> The clone-all-three sequence lives in <a href="#onboarding">Engineering Onboarding</a>.</li>
+</ul>
+
+<h3 id="ld-prereqs">Prerequisites</h3>
+
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web</a>
+  <a data-kind="wiki">Engineering onboarding (wiki article 1004)</a>
+</div>
+
+<dl>
+  <dt>Node &gt;= 20</dt>
+  <dd>Required by both repos (the <code>engines</code> field in each <code>package.json</code>).</dd>
+  <dt>Package managers</dt>
+  <dd><a class="gh-repo" data-repo="web"></a> uses pnpm (pinned <code>pnpm@9.1.0</code>). <a class="gh-repo" data-repo="platform"></a> uses npm workspaces.</dd>
+  <dt>Local Postgres</dt>
+  <dd>A running local Postgres instance is required. The exact provisioning steps are not documented in the sources; supply your own instance.</dd>
+  <dt><code>DATABASE_URL</code></dt>
+  <dd>Required for the backend. <code>migrate.sh</code> asserts it is set, and <code>make seed</code> runs <code>psql "$DATABASE_URL"</code> against it.</dd>
+</dl>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">One shared Postgres</span>All backend services share a single Postgres instance, each owning its own schema. See <a href="#data-model">Core Domain &amp; Data Model</a> for what the schemas hold.</div>
+</div>
+
+<h3 id="ld-platform">platform (backend)</h3>
+
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/Makefile</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/scripts/migrate.sh</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/scripts/seed.sql</a>
+</div>
+
+<p class="annotatable">The backend is driven entirely by the <code>platform/Makefile</code>. The everyday command is <code>make dev</code>, which migrates, seeds, then starts every service in the workspace.</p>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">make dev</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart LR
+  A[make dev] --> B[make migrate<br/>accounts, billing,<br/>usage, notifications]
+  B --> C[make seed<br/>Acme Robotics fixture]
+  C --> D[start all services<br/>hot reload]</pre></div>
+</div>
+
+<div class="table-wrapper"><table><thead><tr><th>Command</th><th>What it does</th></tr></thead><tbody>
+  <tr><td><code>make dev</code></td><td>Runs <code>make migrate</code> and <code>make seed</code>, then starts every service with hot reload.</td></tr>
+  <tr><td><code>make migrate</code></td><td>Applies each service's migrations in filename order (accounts, billing, usage, notifications). See <a href="#database-migrations">Database Migrations</a> for mechanics.</td></tr>
+  <tr><td><code>make seed</code></td><td>Loads the fixture via <code>psql "$DATABASE_URL" -f scripts/seed.sql</code>.</td></tr>
+  <tr><td><code>make test</code></td><td>Runs vitest across all workspaces. See <a href="#testing">Testing</a>.</td></tr>
+  <tr><td><code>make lint</code></td><td>Runs eslint over <code>services</code>.</td></tr>
+  <tr><td><code>make clean</code></td><td>Removes built <code>dist</code> output and <code>node_modules</code>.</td></tr>
+</tbody></table></div>
+
+<p class="annotatable">A typical first run looks like this:</p>
+
+<div class="codeblock"><pre><code>export DATABASE_URL=postgres://localhost/platform
+make dev</code></pre></div>
+
+<p class="annotatable"><code>migrate.sh</code> applies every <code>.sql</code> file in a directory in filename order with <code>-v ON_ERROR_STOP=1</code>, so a bad migration halts the run. You can target one service directly:</p>
+
+<div class="codeblock"><pre><code>./scripts/migrate.sh services/accounts/migrations</code></pre></div>
+
+<h4 id="ld-seed">The seed fixture</h4>
+
+<p class="annotatable"><code>make seed</code> loads a small, predictable dataset so you have something to develop against:</p>
+
+<ul>
+  <li><strong>One org.</strong> "Acme Robotics" on the Team plan.</li>
+  <li><strong>Three users.</strong> <code>ada@acme.test</code> (owner), <code>grace@acme.test</code> (admin), <code>alan@acme.test</code> (member).</li>
+  <li><strong>One invoice.</strong> An open invoice for $49 (4900 cents) covering the current month.</li>
+</ul>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Team plan is implied, not linked</span>The seed file describes the org as being on the Team plan and inserts a matching $49 open invoice, but it does not write a plan row or an org-to-plan link. Treat the Team association as fixture intent rather than seeded data.</div>
+</div>
+
+<p class="annotatable">For service internals — the service classes, typecheck, and test mechanics — see <a href="#backend-development">Backend Development</a>.</p>
+
+<h3 id="ld-web">web (frontend)</h3>
+
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web/package.json</a>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web/README.md</a>
+</div>
+
+<p class="annotatable">The frontend is a pnpm monorepo. Install once, then run every app in parallel:</p>
+
+<div class="codeblock"><pre><code>pnpm install
+pnpm dev</code></pre></div>
+
+<div class="table-wrapper"><table><thead><tr><th>Command</th><th>What it does</th></tr></thead><tbody>
+  <tr><td><code>pnpm dev</code></td><td>Runs every app in parallel — dashboard on <code>:3000</code>, admin on <code>:3001</code>.</td></tr>
+  <tr><td><code>pnpm --filter dashboard dev</code></td><td>Runs just one app.</td></tr>
+  <tr><td><code>pnpm test</code></td><td>Runs vitest. See <a href="#testing">Testing</a>.</td></tr>
+  <tr><td><code>pnpm lint</code></td><td>Runs eslint over <code>apps</code> and <code>packages</code>.</td></tr>
+</tbody></table></div>
+
+<p class="annotatable">The apps reach the backend only through the gateway, configured by two env vars:</p>
+
+<dl>
+  <dt><code>NEXT_PUBLIC_API_URL</code></dt>
+  <dd>Gateway base URL. Defaults to <code>http://localhost:3000</code> — the local gateway — so it usually needs no setting in development.</dd>
+  <dt><code>NEXT_PUBLIC_ENV</code></dt>
+  <dd>One of <code>development</code>, <code>staging</code>, or <code>production</code>.</dd>
+</dl>
+
+<div class="panel tip">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 10.5 8.5 14 15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Run both stacks together</span>Because <code>NEXT_PUBLIC_API_URL</code> defaults to the local gateway on port 3000, starting <code>make dev</code> in one terminal and <code>pnpm dev</code> in another gives you a fully wired local environment. For the api-client and the no-direct-fetch rules, see <a href="#frontend-development">Frontend Development</a>.</div>
+</div>

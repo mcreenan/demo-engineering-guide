@@ -1,0 +1,171 @@
+<p class="lead annotatable">Authentication answers who you are; authorization answers what you may do. At Demo Co both are settled at the gateway and in the services behind it: an opaque <code>demo_session</code> cookie identifies the caller, and a server-side role decides what that caller can do inside their org.</p>
+
+<ul>
+  <li><strong>Sessions.</strong> The browser sends an opaque <code>demo_session</code> cookie; the gateway verifies it, checks expiry, and attaches identity headers before forwarding inward.</li>
+  <li><strong>Roles.</strong> <code>owner</code> | <code>admin</code> | <code>member</code>, enforced server-side. The frontend hiding a control is convenience, not security.</li>
+  <li><strong>One owner per org.</strong> Enforced by a unique partial index; transferring ownership demotes the previous owner to admin.</li>
+  <li><strong>API keys.</strong> Bearer tokens (<code>demo_sk_</code>) with admin-level permissions, shown once, revocable instantly.</li>
+  <li><strong>SSO/SAML.</strong> Enterprise plan only; first-time SSO sign-in provisions a member; keep a break-glass owner with a password.</li>
+</ul>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Where this lives</span>This section owns auth, sessions, API keys, and SSO. The request lifecycle and header injection are owned by <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>; security policy by <a href="#security">Security &amp; Secrets</a>; plan gating for SSO by <a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a>.</div>
+</div>
+
+<h3 id="sessions">Sessions: the demo_session cookie</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra</a>
+  <a data-kind="wiki">Security &amp; secrets (wiki article 1009)</a>
+</div>
+
+<p class="annotatable">Authentication is a single, opaque cookie. The browser sends <code>demo_session</code>; the gateway reads it via <code>req.cookies["demo_session"]</code> and resolves it to a verified identity. The cookie value is opaque — it carries no claims itself, so the gateway must look it up.</p>
+
+<p class="annotatable"><a class="ident" data-type="function" data-repo="platform">verifySession</a> is the gateway's one job before routing: look up the token, confirm it has not expired, and stash the identity on the request so <a class="ident" data-type="function" data-repo="platform">proxy</a> can forward it. The resolved <a class="ident" data-type="class" data-repo="platform">Session</a> is <code>{ userId, orgId, expiresAt }</code>.</p>
+
+<dl>
+  <dt>No cookie</dt>
+  <dd>Returns <code>401 {"error":"no session"}</code>.</dd>
+  <dt>Missing session or expired</dt>
+  <dd>When the token resolves to nothing, or <code>expiresAt &lt; now</code>, returns <code>401 {"error":"session expired"}</code>.</dd>
+  <dt>Valid</dt>
+  <dd>Stashes the <a class="ident" data-type="class" data-repo="platform">Session</a> on the request and continues to the proxy.</dd>
+  <dt>Lookup</dt>
+  <dd><a class="ident" data-type="function" data-repo="platform">lookupSession</a> resolves a token to identity; its commented query is <code>SELECT user_id, org_id, expires_at FROM sessions WHERE token = $1</code>. It is backed by Redis in production and is not implemented in the sample.</dd>
+</dl>
+
+<p class="annotatable">The Redis backing is confirmed by infra: the gateway pod receives a <code>gateway-secrets/redis-url</code> secret via <code>secretKeyRef</code> — see <a class="gh-repo" data-repo="infra"></a>. After verifying, the gateway forwards to the internal service and sets the identity headers from the verified session, as detailed in <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>.</p>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Session lifetime is not specified</span>The gateway only checks <code>expiresAt &lt; now</code>; no default session TTL or lifetime is defined in the sources. How sessions are created (the login endpoint, credential verification) is also not present here — only verification is shown.</div>
+</div>
+
+<div class="panel danger">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M6.7 2.75h6.6l4.95 4.95v6.6l-4.95 4.95H6.7L1.75 14.3V7.7L6.7 2.75Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 6.5v4.2M10 13.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Trust the headers, not the body</span>Internal services trust <code>x-user-id</code> and <code>x-org-id</code>, never re-read the cookie, and must ignore any <code>orgId</code> in the request body. This policy is owned by <a href="#security">Security &amp; Secrets</a>.</div>
+</div>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Request auth flow</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart LR
+  B[Browser] --"cookie<br/>demo_session"--> G[Gateway :3000<br/>verifySession]
+  G --"lookupSession (Redis)<br/>check expiry"--> D{valid?}
+  D --"no / expired"--> E[401<br/>no session /<br/>session expired]
+  E --> B
+  D --"valid"--> P[proxy sets<br/>x-user-id + x-org-id]
+  P --> S["service.internal:8080"]
+  H[GET /healthz] -. bypasses<br/>verifySession .-> S</pre></div>
+</div>
+
+<p class="annotatable">One route is intentionally open: <code>/healthz</code> must not require auth. The gateway registers <code>app.use(verifySession)</code> after the healthz route, so everything past it requires a valid session. The probe detail is owned by <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>.</p>
+
+<h3 id="roles">Roles &amp; authorization</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web</a>
+  <a data-kind="help" href="https://help.demo.co/members-and-roles">Members &amp; roles</a>
+  <a data-kind="wiki">Security &amp; secrets (wiki article 1009)</a>
+</div>
+
+<p class="annotatable">There are exactly three roles, and authorization is always enforced server-side. The <a class="gh-repo" data-repo="web"></a> dashboard may hide a control the caller cannot use, but that is convenience, not security — the check that matters runs in the service.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Role</th><th>Can do</th><th>Cannot do</th></tr></thead>
+  <tbody>
+    <tr><td><code>owner</code></td><td>Everything, including billing and transferring ownership.</td><td>—</td></tr>
+    <tr><td><code>admin</code></td><td>Invite/remove members, change roles, manage settings.</td><td>—</td></tr>
+    <tr><td><code>member</code></td><td>Use the product.</td><td>Manage billing or other members.</td></tr>
+  </tbody>
+</table></div>
+
+<p class="annotatable">In the frontend, <a class="ident" data-type="class" data-repo="web">MembersPage</a> derives <code>canInvite</code> from the role (owner or admin) and renders a <a class="ident" data-type="module" data-repo="web">RoleBadge</a>; the authoritative check still happens in <a class="ident" data-type="class" data-repo="platform">AccountsService</a>. The column-level schema for <code>accounts.users</code> — the <code>role</code> CHECK and the one-owner index — is owned by <a href="#data-model">Core Domain &amp; Data Model</a>.</p>
+
+<h4 id="one-owner">Exactly one owner per org</h4>
+
+<p class="annotatable">Every org has exactly one owner, and the database guarantees it. A unique partial index <code>one_owner_per_org ON accounts.users (org_id) WHERE role = 'owner'</code> makes a second owner impossible. The first user of an org is always its owner — <a class="ident" data-type="method" data-repo="platform">createOrg</a> inserts that user with role <code>owner</code>.</p>
+
+<ul>
+  <li><strong>Inviting.</strong> Only owners and admins may invite. <a class="ident" data-type="method" data-repo="platform">inviteMember</a> enforces it server-side; the dashboard mirrors it with <code>canInvite</code>.</li>
+  <li><strong>Changing roles.</strong> <a class="ident" data-type="method" data-repo="platform">setRole</a> updates a member's role within the org.</li>
+  <li><strong>Removing a member.</strong> Access ends immediately; anything they created stays with the org.</li>
+</ul>
+
+<div class="panel tip">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 10.5 8.5 14 15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Transferring ownership before someone leaves</span>To hand off an org, promote another member to <code>owner</code>. The previous owner is demoted to <code>admin</code> so the org always has exactly one owner — do this before the current owner leaves, not after.</div>
+</div>
+
+<h3 id="api-keys">API keys</h3>
+<div class="sources-data" hidden>
+  <a data-kind="help" href="https://help.demo.co/api-keys">API keys</a>
+  <a data-kind="wiki">Security &amp; secrets (wiki article 1009)</a>
+</div>
+
+<p class="annotatable">API keys let an integration call the API without a browser session. They are created at <strong>Settings → API keys</strong> by owners and admins only, and a key has the same permissions as an admin in your org — so treat it like a password.</p>
+
+<dl>
+  <dt>Created at</dt>
+  <dd>Settings → API keys (owners and admins only).</dd>
+  <dt>Shown once</dt>
+  <dd>The full value appears only at creation — "Copy the key now." Store it in a secret manager, never in source control.</dd>
+  <dt>Used as</dt>
+  <dd>A bearer token sent to <code>https://api.demo.co</code>, e.g. <code>Authorization: Bearer demo_sk_...</code> (prefix <code>demo_sk_</code>).</dd>
+  <dt>Permissions</dt>
+  <dd>The same as an admin in your org.</dd>
+  <dt>Revoked at</dt>
+  <dd>Settings → API keys. Revocation takes effect at once and cannot be undone.</dd>
+</dl>
+
+<p class="annotatable">To rotate a key, create a new one, update your integrations to use it, then delete the old key. Because customer-facing keys can be revoked instantly, revocation is the first move on suspected exposure — secret-handling policy is owned by <a href="#security">Security &amp; Secrets</a>.</p>
+
+<div class="codeblock"><pre><code><span class="cb-comment"># Call the API with a key instead of a session cookie</span>
+curl https://api.demo.co/accounts/members \
+  -H "Authorization: Bearer demo_sk_..."</code></pre></div>
+
+<h3 id="sso-saml">SSO &amp; SAML</h3>
+<div class="sources-data" hidden>
+  <a data-kind="help" href="https://help.demo.co/sso-saml">Single sign-on (SAML)</a>
+</div>
+
+<p class="annotatable">Single sign-on is available on the Enterprise plan only and supports SAML 2.0 identity providers — Okta, Entra ID, Google Workspace, and other SAML 2.0 providers. Plan details and pricing are owned by <a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a>.</p>
+
+<ol>
+  <li><strong>Open the settings.</strong> An owner or admin goes to Settings → Security → Single sign-on.</li>
+  <li><strong>Configure the IdP.</strong> Copy the ACS URL and Entity ID into the IdP's SAML app.</li>
+  <li><strong>Return the metadata.</strong> Paste the IdP metadata URL back (or upload the XML) and Save.</li>
+  <li><strong>Test before enabling.</strong> Use Test connection before turning SSO on.</li>
+</ol>
+
+<p class="annotatable">With <strong>just-in-time provisioning</strong>, a first-time SSO sign-in adds the user to the org automatically as a <code>member</code>; promote them later if needed. Once SSO is verified you can require it, after which members can no longer sign in with a password.</p>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Keep a break-glass owner</span>When you require SSO, keep at least one owner who can still sign in with a password as a break-glass account in case the IdP is unavailable. This is help-documented product behavior; the sources show no code enforcement of it.</div>
+</div>
+
+<h3 id="session-expired">When a session expires</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web</a>
+  <a data-kind="help" href="https://help.demo.co/troubleshooting-login">Troubleshooting login</a>
+</div>
+
+<p class="annotatable">When the gateway returns a <code>401</code>, the frontend surfaces it as a re-login. The api-client sends the cookie with <code>credentials: "include"</code> and, on <code>res.status === 401</code>, throws a <a class="ident" data-type="class" data-repo="web">SessionExpiredError</a> — the api-client is the only backend wrapper, as covered in <a href="#frontend-development">Frontend Development</a>.</p>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Session-expired loop</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart LR
+  A[api-client request<br/>credentials: include] --> B{res.status}
+  B --"200"--> C[render]
+  B --"401"--> D[throw<br/>SessionExpiredError]
+  D --> E[prompt re-login]
+  E --> A</pre></div>
+</div>
+
+<p class="annotatable">For users, the Help Center frames repeated logouts as a timed-out session or a browser blocking cookies: sign in again and enable cookies for <code>demo.co</code>. Private or incognito windows each start a fresh session, and a password reset link is valid for one hour.</p>
+
+<ul>
+  <li><strong>SSO users.</strong> Use "Sign in with SSO" — a password may not exist for the account.</li>
+  <li><strong>SSO failing.</strong> Confirm IT has assigned the Demo Co app, and ask an admin to re-run Test connection.</li>
+</ul>

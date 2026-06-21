@@ -1,0 +1,93 @@
+<p class="lead annotatable">Code review keeps <code>main</code> releasable and spreads knowledge across the team. Treat it as a conversation, not a gate to grind through: branch off <code>main</code>, keep the pull request small, get one review, and merge.</p>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">In short</span>Small PRs, the <em>why</em> in the description, tests with the change, a reply within a business day, and four things true before merge: tests pass and are covered, one approval, no unresolved &ldquo;must fix,&rdquo; and schema changes follow the migrations runbook.</div>
+</div>
+
+<p class="annotatable">PRs span all three repositories &mdash; <a class="gh-repo" data-repo="platform"></a>, <a class="gh-repo" data-repo="web"></a>, and <a class="gh-repo" data-repo="infra"></a> &mdash; and the same expectations apply everywhere.</p>
+
+<h3>Why we review</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Code review (wiki article 1005)</a>
+</div>
+<p class="annotatable">Two goals, in order: keep <code>main</code> releasable, and spread knowledge so no part of the system has only one person who understands it. The point is a shared, deployable codebase &mdash; not a checkpoint to survive.</p>
+
+<h3>For authors</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Code review (wiki article 1005)</a>
+</div>
+<p class="annotatable">Make the change easy to review and easy to trust.</p>
+<ul>
+  <li><strong>Keep it small.</strong> One idea per PR; split a big change into reviewable pieces.</li>
+  <li><strong>Write the why.</strong> Put the reason for the change in the description, along with how you verified it.</li>
+  <li><strong>Self-review first.</strong> Read your own diff before asking anyone else to.</li>
+  <li><strong>Bring the tests.</strong> Tests come with the change, not in a follow-up &mdash; see <a href="#testing">Testing</a>.</li>
+</ul>
+
+<h3>For reviewers</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Code review (wiki article 1005)</a>
+</div>
+<p class="annotatable">Respond within a business day &mdash; a stuck PR blocks a teammate. Review for substance and let tooling handle the rest.</p>
+<dl>
+  <dt>What to review for</dt>
+  <dd>Correctness, clarity, tests, and fit with the surrounding code.</dd>
+  <dt>What not to review for</dt>
+  <dd>Style &mdash; let the linter handle it (eslint via <code>make lint</code>; see <a href="#coding-standards">Coding Standards &amp; Conventions</a>).</dd>
+  <dt>How to comment</dt>
+  <dd>Be specific and kind, and mark each comment <strong>&ldquo;must fix&rdquo;</strong> or <strong>&ldquo;nit&rdquo;</strong> so the author knows what blocks the merge.</dd>
+</dl>
+
+<h3>The bar to merge</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Code review (wiki article 1005)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">.github/workflows/deploy.yml</a>
+</div>
+<p class="annotatable">All four of these must be true before a PR merges:</p>
+<ol>
+  <li><strong>Tests pass and are covered.</strong> CI runs the test suite on every push as the <code>test</code> job, and it gates everything downstream.</li>
+  <li><strong>One approval.</strong> A single review is enough to merge.</li>
+  <li><strong>No unresolved &ldquo;must fix.&rdquo;</strong> Nits can wait; must-fixes cannot.</li>
+  <li><strong>Schema changes follow the migrations runbook.</strong> Any schema change goes through the process in <a href="#database-migrations">Database Migrations</a> (wiki article 1007).</li>
+</ol>
+
+<p class="annotatable">CI enforces the test gate in <code>.github/workflows/deploy.yml</code>: the <code>build-and-push</code> job declares <code>needs: test</code>, so a red build never deploys. The same suite runs locally per repo:</p>
+<div class="table-wrapper"><table>
+  <thead><tr><th>Where</th><th>Command</th></tr></thead>
+  <tbody>
+    <tr><td><a class="gh-repo" data-repo="platform"></a></td><td><code>make test</code> (runs <code>vitest run</code>)</td></tr>
+    <tr><td><a class="gh-repo" data-repo="web"></a></td><td><code>pnpm test</code> (runs <code>vitest run</code>)</td></tr>
+    <tr><td>CI, every push</td><td>the <code>test</code> job, which gates everything downstream</td></tr>
+  </tbody>
+</table></div>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Why the bar is high</span>Because merges deploy to staging immediately, the bar is &ldquo;good enough to be live for customers tomorrow.&rdquo; A merge to <code>main</code> runs <code>test</code>, builds images, and deploys to staging automatically &mdash; see <a href="#release-and-deployment">Release &amp; Deployment</a>.</div>
+</div>
+
+<h3>The review loop</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Code review (wiki article 1005)</a>
+  <a data-kind="wiki">Engineering onboarding (wiki article 1004)</a>
+</div>
+<p class="annotatable">A PR moves from open to merged with one back-edge: reviewer comments send it back to the author until the bar is met. The &ldquo;one review&rdquo; of trunk-based development is the same as the &ldquo;one approval&rdquo; on the merge bar.</p>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Review to deploy</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart TD
+  A["PR opened<br/>self-reviewed + tests"] --> B["Reviewer responds<br/>within 1 business day"]
+  B --> C["Comments<br/>must fix vs nit"]
+  C -->|must fix| A
+  C -->|bar met| D{"Schema change?"}
+  D -->|yes| E["Follow migrations runbook"]
+  D -->|no| F["Merge to main"]
+  E --> F
+  F --> G["Auto-deploy to staging<br/>live for customers tomorrow"]</pre></div>
+</div>
+
+<div class="panel tip">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 10.5 8.5 14 15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">New here?</span>The branch-off-<code>main</code>, one-review, merge workflow is trunk-based development &mdash; the bigger picture lives in <a href="#onboarding">Engineering Onboarding</a>.</div>
+</div>

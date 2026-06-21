@@ -1,0 +1,123 @@
+<p class="lead annotatable">This is the shared vocabulary of the guide: the terms that recur across architecture, billing, auth, and operations, each defined in a sentence or two and linked back to the section that owns it. When a definition and a section disagree, the owning section wins &mdash; this page is the index, not the authority.</p>
+
+<ul>
+  <li><strong>Alphabetical.</strong> One flat list, ADR through <code>x-org-id</code>.</li>
+  <li><strong>Linked to an owner.</strong> Each term points to the section that defines its behaviour in full.</li>
+  <li><strong>Grounded in the sources.</strong> Enums, ports, and prices match the code, the wiki, and the Help Center.</li>
+</ul>
+
+<h3>Glossary</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Architecture Decision Records (wiki article 1001)</a>
+  <a data-kind="wiki">Service catalog (wiki article 1008)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="help" href="https://help.demo.co">Help Center</a>
+</div>
+
+<dl>
+  <dt>ADR (Architecture Decision Record)</dt>
+  <dd>A short record of a significant architecture decision; the wiki is canonical for numbering. <a href="#architecture">ADR-001</a> is "API gateway as the single entrypoint" and ADR-002 is "Schema-per-service in a shared Postgres" (wiki article 1001). The platform doc swaps these numbers &mdash; follow the wiki.</dd>
+
+  <dt>admin</dt>
+  <dd>The middle role (<code>owner</code> | <code>admin</code> | <code>member</code>); can manage members, create API keys, and the like. Roles are enforced server-side &mdash; see <a href="#auth">Authentication &amp; Authorization</a>.</dd>
+
+  <dt>API key</dt>
+  <dd>A bearer token (prefix <code>demo_sk_</code>) sent to <code>https://api.demo.co</code>, created at <code>Settings &rarr; API keys</code> by owners or admins only. The full value is shown once, it carries the same permissions as an admin, and revocation is immediate and cannot be undone. See <a href="#auth">Authentication &amp; Authorization</a>.</dd>
+
+  <dt>append-only</dt>
+  <dd>A table whose rows are only inserted, never updated or deleted. <a href="#data-model"><code>usage.usage_events</code></a> is append-only.</dd>
+
+  <dt>billing cycle</dt>
+  <dd>The recurring period an org is billed over; usage resets at the start of each cycle, and customers are never cut off mid-cycle. See <a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a>.</dd>
+
+  <dt>break-glass account</dt>
+  <dd>When SSO is required, at least one owner kept able to sign in with a password in case the identity provider is unavailable. See <a href="#auth">Authentication &amp; Authorization</a>.</dd>
+
+  <dt>expand/contract migration</dt>
+  <dd>A two-deploy migration pattern (expand, then contract) used because pods roll one at a time, so old and new code briefly share the database &mdash; for example, add a nullable column and backfill (deploy 1), then drop the old column (deploy 2). See <a href="#database-migrations">Database Migrations</a>.</dd>
+
+  <dt>gateway</dt>
+  <dd>The single public entrypoint and the only authenticated edge; it runs <a class="ident" data-type="method" data-repo="platform">verifySession</a> then proxy-forwards to internal services, owns no schema, and listens on port <code>3000</code>. See <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>.</dd>
+
+  <dt>included units</dt>
+  <dd>The usage quota bundled into a plan before overage is charged: Free 1,000, Team 25,000, Enterprise 500,000. See <a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a>.</dd>
+
+  <dt>Incident Commander</dt>
+  <dd>The incident-response role that runs the incident, makes the calls, and keeps the timeline. See <a href="#incident-response">Incident Response &amp; Postmortems</a>.</dd>
+
+  <dt>internal service</dt>
+  <dd>A service not reachable from outside the cluster; it resolves at <code>http://&lt;name&gt;.internal</code> on container port <code>8080</code> and is never called directly by other services &mdash; cross-service reads go back through the gateway. See <a href="#service-catalog">Platform Services</a>.</dd>
+
+  <dt>invoice</dt>
+  <dd>A bill issued against an org, with the amount stored in cents. The status enum is <code>draft</code> | <code>open</code> | <code>paid</code> | <code>void</code>: <code>draft</code> while the cycle is in progress, <code>open</code> once finalized and sent, <code>paid</code> once charged, or <code>void</code> if cancelled. ("Overdue" describes a long-unpaid invoice but is not a status value.) See <a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a>.</dd>
+
+  <dt>JIT provisioning (just-in-time)</dt>
+  <dd>When SSO is on, a first-time SSO user is added to the org automatically as a <code>member</code>. See <a href="#auth">Authentication &amp; Authorization</a>.</dd>
+
+  <dt>member</dt>
+  <dd>The lowest-privilege role (<code>owner</code> | <code>admin</code> | <code>member</code>) and the default role for JIT-provisioned SSO users. See <a href="#auth">Authentication &amp; Authorization</a>.</dd>
+
+  <dt>notification</dt>
+  <dd>An outbound message logged in <a href="#data-model"><code>notifications.notifications</code></a>; the channel enum is <code>email</code> | <code>webhook</code>, the templates are <code>invoice_receipt</code>, <code>member_invite</code>, <code>usage_alert</code>, and <code>payment_failed</code>, and the status enum is <code>pending</code> | <code>sent</code> | <code>failed</code>. See <a href="#notifications-and-webhooks">Notifications &amp; Webhooks</a>.</dd>
+
+  <dt>org / organization</dt>
+  <dd>The top-level tenant; members, data, and billing all belong to an org (<a href="#data-model"><code>accounts.orgs</code></a>). See <a href="#data-model">Core Domain &amp; Data Model</a>.</dd>
+
+  <dt>overage</dt>
+  <dd>Usage above a plan's included units, billed on the next invoice as <code>max(0, units - includedUnits)</code> times the per-unit price. See <a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a>.</dd>
+
+  <dt>owner</dt>
+  <dd>The highest role; exactly one per org, enforced by the unique partial index <code>one_owner_per_org</code>. See <a href="#auth">Authentication &amp; Authorization</a>.</dd>
+
+  <dt>plan</dt>
+  <dd>A billing tier; the name enum is <code>free</code> | <code>team</code> | <code>enterprise</code>. Free is $0 / 1,000 units; Team is $49 (4900 cents) / 25,000 units; Enterprise is $499 (49900 cents) / 500,000 units. See <a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a>.</dd>
+
+  <dt>postmortem (blameless)</dt>
+  <dd>A blameless write-up after every Sev 1/2 incident, completed within two business days with action items tracked to done. See <a href="#incident-response">Incident Response &amp; Postmortems</a>.</dd>
+
+  <dt>readiness probe</dt>
+  <dd>The gateway's <code>GET /healthz</code>; it must not require auth and it gates traffic, so a bad image fails the rollout instead of taking the site down. See <a href="#release-and-deployment">Release &amp; Deployment</a>.</dd>
+
+  <dt>role</dt>
+  <dd>A user's permission level; the enum is <code>owner</code> | <code>admin</code> | <code>member</code>, enforced server-side &mdash; the frontend hiding a control is convenience, not security. See <a href="#auth">Authentication &amp; Authorization</a>.</dd>
+
+  <dt>schema-per-service</dt>
+  <dd>Each service owns its own schema and tables inside one shared Postgres instance; no service reads another service's tables (wiki article 1001, ADR-002). See <a href="#architecture">Architecture at a Glance</a>.</dd>
+
+  <dt>session cookie</dt>
+  <dd>An opaque cookie named <code>demo_session</code>; the gateway looks it up (backed by Redis in production), checks expiry, and sets identity headers. A missing or expired cookie yields a <code>401</code>. See <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>.</dd>
+
+  <dt>severity (Sev 1/2/3)</dt>
+  <dd>How bad an incident is: Sev 1 is a full outage or data-loss risk (page immediately, all hands); Sev 2 is a major feature down with no workaround (page on-call, open an incident); Sev 3 is degraded or partial with a workaround (business hours). See <a href="#incident-response">Incident Response &amp; Postmortems</a>.</dd>
+
+  <dt>SSO / SAML</dt>
+  <dd>Enterprise-plan-only sign-in via a SAML 2.0 identity provider (Okta, Entra ID, Google Workspace), set up at <code>Settings &rarr; Security &rarr; Single sign-on</code>. See <a href="#auth">Authentication &amp; Authorization</a>.</dd>
+
+  <dt>staging vs production</dt>
+  <dd>staging (cluster <code>eks-staging</code>, database <code>rds-staging</code>) deploys automatically on every merge to <code>main</code>; production (cluster <code>eks-prod</code>, database <code>rds-prod</code>) deploys from a tagged <code>v*</code> release after roughly a 30-minute soak. See <a href="#release-and-deployment">Release &amp; Deployment</a> and <a href="#infrastructure">Infrastructure &amp; Environments</a>.</dd>
+
+  <dt>trunk-based development</dt>
+  <dd>Branching off <code>main</code>, keeping PRs small with one review, and merging back; a merge to <code>main</code> deploys to staging automatically. See <a href="#code-review">Code Review &amp; Pull Requests</a>.</dd>
+
+  <dt>unit</dt>
+  <dd>One metered action; usage above the plan's included units is billed as overage. See <a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a>.</dd>
+
+  <dt>usage event</dt>
+  <dd>An append-only row in <a href="#data-model"><code>usage.usage_events</code></a> (<code>id</code>, <code>org_id</code>, <code>units</code>, <code>occurred_at</code>), summed per org per period for billing. See <a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a>.</dd>
+
+  <dt>webhook</dt>
+  <dd>A notification channel delivering events as JSON to a customer endpoint; add one at <code>Settings &rarr; Notifications &rarr; Webhooks</code>, verify each delivery via the <code>Demo-Signature</code> header, and note it is retried with backoff for up to 24 hours. The endpoint must return <code>2xx</code> quickly or the delivery is treated as failed. See <a href="#notifications-and-webhooks">Notifications &amp; Webhooks</a>.</dd>
+
+  <dt>x-org-id / x-user-id</dt>
+  <dd>Identity headers the gateway sets from the verified session and forwards to internal services; services trust them and must not accept an <code>orgId</code> from the request body. See <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a> and <a href="#security">Security &amp; Secrets</a>.</dd>
+</dl>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">ADR numbering: follow the wiki</span>The platform doc at <code>platform/docs/architecture.md</code> swaps the ADR numbers and titles for the gateway and schema-per-service decisions. Wiki article 1001 is canonical: ADR-001 is the single-entrypoint gateway, ADR-002 is schema-per-service.</div>
+</div>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">"Overdue" is not a status</span>The Help Center calls a long-unpaid invoice "overdue," but that is prose, not an enum value. The invoice status enum is only <code>draft</code> | <code>open</code> | <code>paid</code> | <code>void</code>.</div>
+</div>

@@ -1,0 +1,98 @@
+<p class="lead annotatable">Change the schema in two deploys: <strong>expand</strong> first, then <strong>contract</strong>. Demo Co ships continuously and Kubernetes rolls pods one at a time, so for a short window old and new code run against the same database &mdash; every migration must be safe for that overlap.</p>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">In short</span>Expand then contract over two deploys; each service owns its migrations under <code>platform/services/&lt;name&gt;/migrations</code>; <code>make migrate</code> applies them in filename order; add columns nullable or with a default, backfill in batches, build indexes <code>CONCURRENTLY</code>; never rename or drop a column in the same deploy that stops using it; a failed migration fails the deploy &mdash; fix forward.</div>
+</div>
+
+<p class="annotatable">This section owns migration mechanics. The deploy pipeline and rollout behavior live in <a href="#release-and-deployment">Release &amp; Deployment</a>; the column-level schema lives in <a href="#data-model">Core Domain &amp; Data Model</a>. All migration tooling is in <a class="gh-repo" data-repo="platform"></a>.</p>
+
+<h3>Why expand/contract</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Database migrations (wiki article 1007)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">runbooks/deploys.md</a>
+</div>
+<p class="annotatable">Migrations are applied as part of the release, before the new image takes traffic. Because pods roll one at a time, old pods keep serving against the new schema during the rollout, so every migration must be <strong>backward compatible</strong> with the code currently running.</p>
+<p class="annotatable">The way to satisfy that is to split a breaking change across two deploys:</p>
+<dl>
+  <dt>Expand (deploy 1)</dt>
+  <dd>Add the new shape alongside the old one. The schema now supports both the old and new code, so old pods keep working while the rollout proceeds.</dd>
+  <dt>Contract (deploy 2)</dt>
+  <dd>Once every pod runs the new code and nothing reads the old shape, remove it.</dd>
+</dl>
+
+<h3>A worked rename: full_name &rarr; display_name</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Database migrations (wiki article 1007)</a>
+</div>
+<p class="annotatable">This is the documented pattern, not a committed file &mdash; renaming a column directly would break old pods mid-rollout. Split it in two:</p>
+<ol>
+  <li><strong>Deploy 1 (expand).</strong> Add <code>display_name</code> nullable, backfill it from <code>full_name</code>, and ship code that writes <em>both</em> columns and reads the new one. Old pods still read and write <code>full_name</code>, so they keep working.</li>
+  <li><strong>Deploy 2 (contract).</strong> Stop writing <code>full_name</code>, then drop it. By now every pod reads <code>display_name</code>, so nothing depends on the old column.</li>
+</ol>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Expand then contract</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart TD
+  A["Deploy 1 / expand<br/>add display_name nullable<br/>backfill - write both, read new"] --> B["Rollout<br/>pods roll one at a time<br/>old + new share the DB"]
+  B --> C["Deploy 2 / contract<br/>stop writing full_name"]
+  C --> D["DROP full_name"]</pre></div>
+</div>
+
+<h3>Where migrations live and how they run</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Database migrations (wiki article 1007)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">services/*/migrations, scripts/migrate.sh, Makefile</a>
+</div>
+<p class="annotatable">Each service owns its own schema and its own migrations under <code>platform/services/&lt;name&gt;/migrations</code>. A service never migrates another service&rsquo;s schema &mdash; that is the schema-per-service boundary from ADR-002 (see <a href="#architecture">Architecture at a Glance</a> and <a href="#service-catalog">Platform Services</a>).</p>
+<p class="annotatable">Files use a numeric prefix and apply in filename order, e.g. <code>001_init.sql</code>. Today each of the four data-owning services has exactly one migration, its <code>001_init.sql</code>.</p>
+<div class="table-wrapper"><table>
+  <thead><tr><th>Service</th><th>Migrations</th></tr></thead>
+  <tbody>
+    <tr><td>accounts</td><td><code>services/accounts/migrations</code></td></tr>
+    <tr><td>billing</td><td><code>services/billing/migrations</code></td></tr>
+    <tr><td>usage</td><td><code>services/usage/migrations</code></td></tr>
+    <tr><td>notifications</td><td><code>services/notifications/migrations</code></td></tr>
+    <tr><td>gateway</td><td>none &mdash; it owns no schema, so it is not migrated</td></tr>
+  </tbody>
+</table></div>
+<p class="annotatable"><code>make migrate</code> runs <code>./scripts/migrate.sh</code> once per service in a fixed order &mdash; accounts, billing, usage, notifications. It requires <code>DATABASE_URL</code>, and applies every SQL file in a directory in filename order:</p>
+<div class="codeblock"><pre><code><span class="cb-comment"># scripts/migrate.sh, per file, in filename order</span>
+set -euo pipefail
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$file"</code></pre></div>
+<p class="annotatable">Because the script runs under <code>set -euo pipefail</code> with <code>ON_ERROR_STOP=1</code>, a single SQL error aborts the whole run &mdash; which is how a bad migration fails the deploy rather than half-applying.</p>
+
+<h3>Do and don&rsquo;t</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Database migrations (wiki article 1007)</a>
+</div>
+<div class="table-wrapper"><table>
+  <thead><tr><th>Do</th><th>Don&rsquo;t</th></tr></thead>
+  <tbody>
+    <tr><td>Add columns nullable or with a default.</td><td>Rename or drop a column in the same deploy that stops using it.</td></tr>
+    <tr><td>Backfill in batches.</td><td>Add a <code>NOT NULL</code> column without a default to a populated table.</td></tr>
+    <tr><td>Add indexes <code>CONCURRENTLY</code>.</td><td>&nbsp;</td></tr>
+  </tbody>
+</table></div>
+
+<div class="panel tip">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 10.5 8.5 14 15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Model the existing style</span>The committed <code>001_init.sql</code> files show the house syntax to follow: UUID primary keys with <code>DEFAULT gen_random_uuid()</code>, <code>timestamptz DEFAULT now()</code>, role checks like <code>CHECK (role IN ('owner','admin','member'))</code>, and partial unique indexes such as one owner per org. Full table definitions are in <a href="#data-model">Core Domain &amp; Data Model</a>.</div>
+</div>
+
+<h3>When a migration fails</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Database migrations (wiki article 1007)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">runbooks/deploys.md</a>
+</div>
+<p class="annotatable">A failed migration fails the deploy, and the old version keeps serving &mdash; the rollout stops rather than taking the site down. <strong>Fix forward</strong> with a new migration; do not roll the migration back.</p>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Fix forward, don&rsquo;t roll back</span>Write a new migration that corrects the problem and let the pipeline apply it. Rolling a migration back risks leaving the schema and the running code out of step &mdash; the same reason expand and contract are split across two deploys.</div>
+</div>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Reviewing a schema change</span>The merge bar requires that schema changes follow this runbook &mdash; see <a href="#code-review">Code Review &amp; Pull Requests</a>. Service code that uses the new schema lives alongside it; for how services are written, see <a href="#backend-development">Backend Development</a>.</div>
+</div>

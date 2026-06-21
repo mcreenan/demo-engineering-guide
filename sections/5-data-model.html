@@ -1,0 +1,189 @@
+<p class="lead annotatable">The domain centers on the <strong>organization</strong> (org) — the top-level tenant that owns members, plans, invoices, usage, and notifications. Each service owns its own Postgres schema (<a href="#architecture">Architecture at a Glance</a>, ADR-002), so the tables below are grouped by the service that owns them, and this section is the canonical home for column-level schema detail.</p>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">In short</span>UUID primary keys (<code>gen_random_uuid()</code>); money as integer cents; timestamps as <code>timestamptz</code> in UTC. Every table except <code>plans</code> carries <code>org_id</code>. Only <code>accounts.users</code> &rarr; <code>accounts.orgs</code> is an enforced foreign key; other <code>org_id</code> links are logical and cross-schema.</div>
+</div>
+
+<h3 id="data-model-conventions">Conventions</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="wiki">Architecture Decision Records (wiki article 1001)</a>
+</div>
+<p class="annotatable">These rules hold across every schema. They are not optional house style — the migrations enforce them and the TypeScript interfaces mirror them.</p>
+<dl>
+  <dt>Schema-per-service</dt>
+  <dd>Every table lives in its owning service's schema inside one shared Postgres. No service reads another service's tables — see <a href="#service-catalog">Platform Services</a> for the ownership map.</dd>
+  <dt>UUID identifiers</dt>
+  <dd>Primary keys are <code>uuid</code> with default <code>gen_random_uuid()</code>.</dd>
+  <dt>Money as integer cents</dt>
+  <dd>Amounts are stored as <code>integer</code> cents (e.g. <code>amount_cents</code>, <code>monthly_price_cents</code>) — never floats.</dd>
+  <dt>Timestamps</dt>
+  <dd>Time columns are <code>timestamptz</code> in UTC, commonly <code>DEFAULT now()</code>.</dd>
+  <dt>Tenant scoping</dt>
+  <dd>Every table except <code>plans</code> carries <code>org_id</code>. Every service method is scoped to the org the gateway passes; a service must never trust an <code>orgId</code> from a request body. A missing org scope is a security bug — see <a href="#security">Security &amp; Secrets</a>.</dd>
+</dl>
+
+<h3 id="data-model-diagram">Entities at a glance</h3>
+<p class="annotatable">Six tables across four schemas. Only the <a class="ident" data-type="class" data-repo="platform">User</a> &rarr; <a class="ident" data-type="class" data-repo="platform">Org</a> edge is a declared Postgres foreign key (<code>ON DELETE CASCADE</code>); the other <code>org_id</code> relationships are logical, because services never cross schemas and resolve cross-service reads through the gateway.</p>
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Core entities by schema</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">erDiagram
+  ORGS ||--o{ USERS : "FK org_id (cascade)"
+  ORGS ||--o{ INVOICES : "org_id (logical)"
+  ORGS ||--o{ USAGE_EVENTS : "org_id (logical)"
+  ORGS ||--o{ NOTIFICATIONS : "org_id (logical)"
+  PLANS {
+    uuid id
+    text name
+    int monthly_price_cents
+    int included_units
+  }
+  ORGS {
+    uuid id
+    text name
+    timestamptz created_at
+  }
+  USERS {
+    uuid id
+    uuid org_id
+    citext email
+    text role
+  }
+  INVOICES {
+    uuid id
+    uuid org_id
+    int amount_cents
+    text status
+  }
+  USAGE_EVENTS {
+    uuid id
+    uuid org_id
+    int units
+    timestamptz occurred_at
+  }
+  NOTIFICATIONS {
+    uuid id
+    uuid org_id
+    text channel
+    text status
+  }</pre></div>
+</div>
+<p class="annotatable">The <code>plans</code> table is a standalone shared catalog with no tenant column. Note: the sampled migrations do not define a column linking an org to its chosen plan — there is no <code>plan_id</code> on the org in the available schema, so that association is not shown above.</p>
+
+<h3 id="data-model-accounts">accounts schema</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/accounts/migrations/001_init.sql</a>
+</div>
+<p class="annotatable">The <code>accounts</code> schema holds the tenant root and its members. It requires <code>CREATE EXTENSION citext</code> so emails compare case-insensitively. The mirroring TypeScript symbols are <a class="ident" data-type="class" data-repo="platform">Org</a>, <a class="ident" data-type="class" data-repo="platform">User</a>, and <a class="ident" data-type="class" data-repo="platform">Role</a>.</p>
+<div class="table-wrapper"><table>
+  <thead><tr><th>Table</th><th>Column</th><th>Type / constraint</th></tr></thead>
+  <tbody>
+    <tr><td><code>accounts.orgs</code></td><td><code>id</code></td><td><code>uuid</code> PK, default <code>gen_random_uuid()</code></td></tr>
+    <tr><td></td><td><code>name</code></td><td><code>text NOT NULL</code></td></tr>
+    <tr><td></td><td><code>created_at</code></td><td><code>timestamptz NOT NULL DEFAULT now()</code></td></tr>
+    <tr><td><code>accounts.users</code></td><td><code>id</code></td><td><code>uuid</code> PK</td></tr>
+    <tr><td></td><td><code>org_id</code></td><td><code>uuid NOT NULL REFERENCES accounts.orgs(id) ON DELETE CASCADE</code></td></tr>
+    <tr><td></td><td><code>email</code></td><td><code>citext NOT NULL</code></td></tr>
+    <tr><td></td><td><code>role</code></td><td><code>text NOT NULL CHECK (role IN ('owner','admin','member'))</code></td></tr>
+  </tbody>
+</table></div>
+<ul>
+  <li><strong>Email is unique within an org.</strong> <code>UNIQUE (org_id, email)</code> — case-insensitive via <code>citext</code>.</li>
+  <li><strong>One owner per org.</strong> Enforced by a unique partial index: <code>CREATE UNIQUE INDEX one_owner_per_org ON accounts.users (org_id) WHERE role = 'owner'</code>.</li>
+  <li><strong>First user owns the org.</strong> The first user of an org is its owner; transferring ownership reassigns the role and demotes the previous owner to admin. Role meaning and server-side enforcement live in <a href="#auth">Authentication &amp; Authorization</a>.</li>
+</ul>
+
+<h3 id="data-model-billing">billing schema</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/billing/migrations/001_init.sql</a>
+</div>
+<p class="annotatable">The <code>billing</code> schema holds the shared plan catalog and per-org invoices. TypeScript symbols: <a class="ident" data-type="class" data-repo="platform">Plan</a> and <a class="ident" data-type="class" data-repo="platform">Invoice</a>. Pricing, overage math, and invoice finalization are owned by <a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a> — kept minimal here.</p>
+<div class="table-wrapper"><table>
+  <thead><tr><th>Table</th><th>Column</th><th>Type / constraint</th></tr></thead>
+  <tbody>
+    <tr><td><code>billing.plans</code></td><td><code>id</code></td><td><code>uuid</code> PK</td></tr>
+    <tr><td></td><td><code>name</code></td><td><code>text NOT NULL CHECK (name IN ('free','team','enterprise'))</code></td></tr>
+    <tr><td></td><td><code>monthly_price_cents</code></td><td><code>integer NOT NULL</code></td></tr>
+    <tr><td></td><td><code>included_units</code></td><td><code>integer NOT NULL DEFAULT 0</code></td></tr>
+    <tr><td><code>billing.invoices</code></td><td><code>id</code></td><td><code>uuid</code> PK</td></tr>
+    <tr><td></td><td><code>org_id</code></td><td><code>uuid NOT NULL</code> (plain uuid, no declared FK — billing is a separate schema/service)</td></tr>
+    <tr><td></td><td><code>amount_cents</code></td><td><code>integer NOT NULL DEFAULT 0</code></td></tr>
+    <tr><td></td><td><code>status</code></td><td><code>text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','open','paid','void'))</code></td></tr>
+    <tr><td></td><td><code>period_start</code></td><td><code>timestamptz NOT NULL</code></td></tr>
+    <tr><td></td><td><code>period_end</code></td><td><code>timestamptz NOT NULL</code></td></tr>
+  </tbody>
+</table></div>
+<ul>
+  <li><strong>Shared catalog.</strong> <code>plans</code> has no <code>org_id</code>; it is the catalog of plan definitions. The seeded rows are <code>free</code>, <code>team</code>, and <code>enterprise</code> — pricing and included units are detailed in <a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a>.</li>
+  <li><strong>Invoice lookups.</strong> <code>CREATE INDEX invoices_by_org ON billing.invoices (org_id, period_start DESC)</code>.</li>
+  <li><strong>No FK on <code>org_id</code>.</strong> Invoices reference an org by id only; there is no database foreign key, because <code>billing</code> and <code>accounts</code> are owned by separate services that do not cross schemas.</li>
+</ul>
+<p class="annotatable">Invoices move through a small state machine — from draft, to finalized, to charged, or cancelled:</p>
+<dl>
+  <dt><code>draft</code></dt><dd>Billing cycle in progress.</dd>
+  <dt><code>open</code></dt><dd>Finalized and sent.</dd>
+  <dt><code>paid</code></dt><dd>Successful charge.</dd>
+  <dt><code>void</code></dt><dd>Cancelled.</dd>
+</dl>
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Invoice status</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">stateDiagram-v2
+  [*] --> draft
+  draft --> open
+  open --> paid
+  draft --> void
+  open --> void
+  paid --> [*]
+  void --> [*]</pre></div>
+</div>
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">"overdue" is not a status</span>The Help Center may call a long-unpaid invoice "overdue", but <code>overdue</code> is not a value in the <code>status</code> enum. The only statuses are <code>draft</code>, <code>open</code>, <code>paid</code>, and <code>void</code>.</div>
+</div>
+
+<h3 id="data-model-usage">usage schema</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/usage/migrations/001_init.sql</a>
+</div>
+<p class="annotatable">The <code>usage</code> schema records metered events. It is append-only — events are never updated or deleted. The TypeScript symbol is <a class="ident" data-type="class" data-repo="platform">UsageEvent</a>.</p>
+<div class="table-wrapper"><table>
+  <thead><tr><th>Table</th><th>Column</th><th>Type / constraint</th></tr></thead>
+  <tbody>
+    <tr><td><code>usage.usage_events</code></td><td><code>id</code></td><td><code>uuid</code> PK</td></tr>
+    <tr><td></td><td><code>org_id</code></td><td><code>uuid NOT NULL</code></td></tr>
+    <tr><td></td><td><code>units</code></td><td><code>integer NOT NULL CHECK (units &gt;= 0)</code></td></tr>
+    <tr><td></td><td><code>occurred_at</code></td><td><code>timestamptz NOT NULL DEFAULT now()</code></td></tr>
+  </tbody>
+</table></div>
+<ul>
+  <li><strong>Append-only.</strong> Rows are only ever inserted, giving an immutable event log.</li>
+  <li><strong>Aggregate index.</strong> <code>CREATE INDEX usage_events_by_org_time ON usage.usage_events (org_id, occurred_at)</code> serves the billing access pattern of summing units for an org over a window.</li>
+  <li><strong>Read through the gateway.</strong> Billing reads period totals from the usage service via the gateway — it never queries the <code>usage</code> schema directly. See <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>.</li>
+</ul>
+
+<h3 id="data-model-notifications">notifications schema</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/notifications/migrations/001_init.sql</a>
+</div>
+<p class="annotatable">The <code>notifications</code> schema queues outbound messages for a delivery worker. TypeScript symbols: <a class="ident" data-type="class" data-repo="platform">Notification</a>, <a class="ident" data-type="class" data-repo="platform">Channel</a>, and <a class="ident" data-type="class" data-repo="platform">Template</a>. Channels and templates are owned by <a href="#notifications-and-webhooks">Notifications &amp; Webhooks</a>.</p>
+<div class="table-wrapper"><table>
+  <thead><tr><th>Table</th><th>Column</th><th>Type / constraint</th></tr></thead>
+  <tbody>
+    <tr><td><code>notifications.notifications</code></td><td><code>id</code></td><td><code>uuid</code> PK</td></tr>
+    <tr><td></td><td><code>org_id</code></td><td><code>uuid NOT NULL</code></td></tr>
+    <tr><td></td><td><code>channel</code></td><td><code>text NOT NULL CHECK (channel IN ('email','webhook'))</code></td></tr>
+    <tr><td></td><td><code>template</code></td><td><code>text NOT NULL</code> (no DB CHECK; valid values enforced in TypeScript)</td></tr>
+    <tr><td></td><td><code>status</code></td><td><code>text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent','failed'))</code></td></tr>
+    <tr><td></td><td><code>created_at</code></td><td><code>timestamptz NOT NULL DEFAULT now()</code></td></tr>
+  </tbody>
+</table></div>
+<ul>
+  <li><strong>App-enforced templates.</strong> Allowed values come from the TypeScript <a class="ident" data-type="class" data-repo="platform">Template</a> union — <code>invoice_receipt</code>, <code>member_invite</code>, <code>usage_alert</code>, <code>payment_failed</code> — not a database constraint.</li>
+  <li><strong>Delivery index.</strong> A partial index serves the worker: <code>CREATE INDEX notifications_pending ON notifications.notifications (created_at) WHERE status = 'pending'</code>.</li>
+</ul>
+
+<div class="panel tip">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 10.5 8.5 14 15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Changing the schema</span>All schema changes go through migrations under <code>platform/services/&lt;name&gt;/migrations</code>, applied in filename order. Follow the expand-then-contract rule in <a href="#database-migrations">Database Migrations</a>; a service never migrates another service's schema.</div>
+</div>

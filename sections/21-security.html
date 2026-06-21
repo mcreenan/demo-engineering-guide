@@ -1,0 +1,114 @@
+<p class="lead annotatable">Security at Demo Co rests on two rules: the gateway is the only authenticated edge, and every query is scoped to the caller's org. Identity flows inward as <code>x-user-id</code> / <code>x-org-id</code> headers the gateway sets, and secrets live in AWS Secrets Manager — never in git.</p>
+
+<ul>
+  <li><strong>One authenticated edge.</strong> The gateway verifies the session and sets identity headers; internal services trust those headers and never accept an <code>orgId</code> from a request body.</li>
+  <li><strong>Org scoping is mandatory.</strong> Every query is scoped to the caller's org. A missing org scope is a security bug, not a nice-to-have.</li>
+  <li><strong>Roles server-side.</strong> <code>owner</code> | <code>admin</code> | <code>member</code> are enforced on the server. The frontend hiding a button is convenience, not security.</li>
+  <li><strong>Secrets in Secrets Manager.</strong> They reach pods as Kubernetes <code>Secret</code> env vars via <code>secretKeyRef</code>. Never commit a secret; rotate on a schedule and immediately on suspected exposure.</li>
+  <li><strong>Report fast.</strong> Revoke first if you can, then report in <code>#security</code>. Sev 1 security issues follow the incident process.</li>
+</ul>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">What this section owns</span>This section owns security policy and secrets. The mechanics of sessions, API keys, and SSO are owned by <a href="#auth">Authentication &amp; Authorization</a>; the request lifecycle and identity-header detail by <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>; cloud, Kubernetes, and Secrets Manager plumbing by <a href="#infrastructure">Infrastructure &amp; Environments</a>.</div>
+</div>
+
+<h3 id="authz-model">The authorization model</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Security &amp; secrets (wiki article 1009)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+</div>
+
+<p class="annotatable">The gateway is the only authenticated edge (ADR-001). It verifies the session, then sets <code>x-user-id</code> and <code>x-org-id</code> from the verified identity before forwarding inward. Internal services are not reachable from outside the cluster, so they trust those headers — but only those headers.</p>
+
+<p class="annotatable">The single most important rule for backend code: the caller's org comes from the header the gateway set, never from the request. Internal services <strong>must never accept an <code>orgId</code> from a request body</strong>; they scope every query to <code>x-org-id</code> and ignore any body <code>orgId</code>. See <a class="ident" data-type="function" data-repo="platform">proxy</a> in <a class="gh-repo" data-repo="platform"></a>.</p>
+
+<dl>
+  <dt>Identity is set, not asked</dt>
+  <dd>The gateway runs <a class="ident" data-type="function" data-repo="platform">verifySession</a>, then copies the verified identity onto <code>x-user-id</code> / <code>x-org-id</code>. Downstream services do not re-read the cookie.</dd>
+  <dt>Every query is org-scoped</dt>
+  <dd>A missing org scope leaks another tenant's data. "A missing org scope is a security bug, not a nice-to-have."</dd>
+  <dt>Roles are enforced server-side</dt>
+  <dd><code>owner</code> | <code>admin</code> | <code>member</code> checks live in the services. "The frontend hiding a button is convenience, not security."</dd>
+  <dt>Health check is the one exception</dt>
+  <dd><code>GET /healthz</code> must not require auth; everything past it requires a valid session.</dd>
+</dl>
+
+<div class="panel danger">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M6.7 2.75h6.6l4.95 4.95v6.6l-4.95 4.95H6.7L1.75 14.3V7.7L6.7 2.75Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 6.5v4.2M10 13.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Never trust a body orgId</span>If a handler reads the org from the request body instead of <code>x-org-id</code>, a caller can read or write another org's data. Trust the header the gateway set; ignore the body. Session lookup, expiry, and the 401 responses are detailed in <a href="#auth">Authentication &amp; Authorization</a>.</div>
+</div>
+
+<h3 id="secrets">Secrets</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Security &amp; secrets (wiki article 1009)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra</a>
+</div>
+
+<p class="annotatable">Secrets live in AWS Secrets Manager and reach pods as Kubernetes <code>Secret</code> env vars, injected via <code>secretKeyRef</code> — see the manifests under <code>infra/kubernetes/*.yaml</code> in <a class="gh-repo" data-repo="infra"></a>. The rules are simple: never commit a secret to git, rotate on a schedule, and rotate immediately on any suspected exposure.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Env var</th><th>Secret reference</th><th>Pod</th></tr></thead>
+  <tbody>
+    <tr><td><code>SESSION_REDIS_URL</code></td><td><code>gateway-secrets/redis-url</code></td><td>gateway</td></tr>
+    <tr><td><code>DATABASE_URL</code></td><td><code>platform-db/url</code></td><td>accounts, billing</td></tr>
+    <tr><td><code>PAYMENTS_API_KEY</code></td><td><code>billing-secrets/payments-api-key</code></td><td>billing</td></tr>
+  </tbody>
+</table></div>
+
+<p class="annotatable">The RDS master password is managed by Secrets Manager rather than hand-set: <code>infra/terraform/rds.tf</code> sets <code>manage_master_user_password = true</code>. No application code ever sees a literal database password.</p>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">A rotated secret looks like a crash loop</span>If a secret is missing or was just rotated, the affected service crash-loops on startup. Diagnose it with <code>kubectl describe pod</code>; this failure mode is also covered by <a href="#observability-and-on-call">Observability &amp; On-Call</a>.</div>
+</div>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Rotation cadence is not pinned down</span>The policy is "rotate on a schedule," but the sources give no concrete interval and describe no automated rotation tooling. Treat the specific schedule as undefined here and follow the current operational practice.</div>
+</div>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Secret injection</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart LR
+  SM[AWS Secrets<br/>Manager] --> KS[Kubernetes<br/>Secret]
+  KS --"secretKeyRef"--> GW[gateway pod<br/>SESSION_REDIS_URL]
+  KS --"secretKeyRef"--> AC[accounts pod<br/>DATABASE_URL]
+  KS --"secretKeyRef"--> BL[billing pod<br/>DATABASE_URL +<br/>PAYMENTS_API_KEY]</pre></div>
+</div>
+
+<h3 id="api-keys-and-sso">Product-facing keys &amp; SSO</h3>
+<div class="sources-data" hidden>
+  <a data-kind="help" href="https://help.demo.co/api-keys">API keys</a>
+  <a data-kind="help" href="https://help.demo.co/sso-saml">SSO &amp; SAML</a>
+</div>
+
+<p class="annotatable">Customers manage their own credentials, and the mechanics are owned by <a href="#auth">Authentication &amp; Authorization</a>. From a security standpoint the points that matter are the blast radius and the speed of revocation.</p>
+
+<dl>
+  <dt>API keys</dt>
+  <dd>Created at Settings -&gt; API keys (owners and admins only), shown in full once, and sent as a bearer token to <code>https://api.demo.co</code> (example prefix <code>demo_sk_</code>). A key has the same permissions as an admin, so store it in a secret manager — never source control.</dd>
+  <dt>Revocation</dt>
+  <dd>Revoke immediately if a key may have leaked. "Revocation takes effect at once and cannot be undone." Rotate by creating a new key, updating integrations, then deleting the old one.</dd>
+  <dt>SSO / SAML</dt>
+  <dd>Enterprise plan only; SAML 2.0 with Okta, Entra ID, or Google Workspace. Just-in-time provisioning adds a first-time SSO user as a member. When requiring SSO, keep one owner who can still sign in by password as a break-glass account.</dd>
+</dl>
+
+<h3 id="reporting">Reporting a security issue</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Security &amp; secrets (wiki article 1009)</a>
+  <a data-kind="wiki">Incident management (wiki article 1006)</a>
+</div>
+
+<p class="annotatable">If something looks wrong, act before you write it up. "Revoke first if you can, then report in <code>#security</code>." Every report is triaged, and Sev 1 security issues follow the incident process.</p>
+
+<ol>
+  <li><strong>Contain.</strong> Revoke the exposed credential or key first if you are able — revocation is immediate.</li>
+  <li><strong>Report.</strong> Post in <code>#security</code> with what happened and what you have already done.</li>
+  <li><strong>Escalate if severe.</strong> A Sev 1 security issue (full outage or data-loss risk) runs through <a href="#incident-response">Incident Response &amp; Postmortems</a> — declare, mitigate, communicate, resolve, postmortem.</li>
+</ol>
+
+<div class="panel tip">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 10.5 8.5 14 15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">When in doubt, ask</span>"When in doubt, ask in <code>#security</code>." Over-reporting a non-issue is cheap; sitting on a real one is not.</div>
+</div>

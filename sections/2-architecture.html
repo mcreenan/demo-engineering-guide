@@ -1,0 +1,124 @@
+<p class="lead annotatable">Demo Co runs a Node + TypeScript monorepo on one shared Postgres, deployed to Kubernetes on EKS. A single public gateway is the only authenticated edge in front of four internal backend services; the browser only ever talks to the gateway.</p>
+
+<ul>
+  <li><strong>Three repos.</strong> <a class="gh-repo" data-repo="platform"></a> (backend API), <a class="gh-repo" data-repo="web"></a> (frontend), and <a class="gh-repo" data-repo="infra"></a> (infrastructure). Each repo is authoritative for its own domain; on conflict, the code wins for behavior.</li>
+  <li><strong>One public edge.</strong> The gateway is the single public entrypoint and the only authenticated edge. Internal services are not reachable from outside the cluster.</li>
+  <li><strong>Five backend services.</strong> gateway, accounts, billing, usage, notifications.</li>
+  <li><strong>One shared Postgres, schema-per-service.</strong> Each service owns its own schema and tables; no service reads another service's tables.</li>
+  <li><strong>No direct service-to-service calls.</strong> A cross-service read goes back out through the gateway over HTTP.</li>
+</ul>
+
+<h3 id="arch-system-shape">The system shape</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Architecture Decision Records (wiki article 1001)</a>
+  <a data-kind="wiki">Service catalog (wiki article 1008)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+</div>
+
+<p class="annotatable"><a class="gh-repo" data-repo="platform"></a> is the backend: a Node + TypeScript monorepo using npm workspaces under <code>services/*</code>. Everything runs on one shared Postgres instance and is deployed to Kubernetes on EKS. The five services divide the system by domain, and the gateway sits in front of the four internal ones.</p>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Request path, at a glance</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart LR
+  Browser["Browser"]
+  GW["Gateway<br/>public edge :3000<br/>api.demo.co"]
+  ACC["accounts<br/>:8080"]
+  BIL["billing<br/>:8080"]
+  USG["usage<br/>:8080"]
+  NOT["notifications<br/>:8080"]
+  PG[("Postgres<br/>schemas: accounts,<br/>billing, usage, notifications")]
+
+  Browser -->|"HTTPS /&lt;service&gt; + demo_session cookie"| GW
+  GW -->|"verifySession, then proxy + x-user-id / x-org-id"| ACC
+  GW --> BIL
+  GW --> USG
+  GW --> NOT
+  ACC --> PG
+  BIL --> PG
+  USG --> PG
+  NOT --> PG
+  BIL -.->|"cross-service read goes back through gateway"| GW</pre></div>
+</div>
+
+<p class="annotatable">The dashed edge is the rule made visible: billing never calls usage directly. When billing needs usage totals, the request goes back out through the gateway, just like any other call. For the full lifecycle, see <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>.</p>
+
+<h3 id="arch-services">Services and what they own</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Service catalog (wiki article 1008)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+</div>
+
+<p class="annotatable">There are five services. The gateway owns no schema; each internal service owns exactly one schema in the shared database. This is the at-a-glance map only — the full catalog lives in <a href="#service-catalog">Platform Services</a> and the column-level schema in <a href="#data-model">Core Domain &amp; Data Model</a>.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Service</th><th>Schema</th><th>Owns</th><th>Role</th></tr></thead>
+  <tbody>
+    <tr><td>gateway</td><td>—</td><td>—</td><td>Public edge: auth + routing</td></tr>
+    <tr><td>accounts</td><td><code>accounts</code></td><td><code>orgs</code>, <code>users</code></td><td>Orgs and members</td></tr>
+    <tr><td>billing</td><td><code>billing</code></td><td><code>plans</code>, <code>invoices</code></td><td>Plans and invoicing</td></tr>
+    <tr><td>usage</td><td><code>usage</code></td><td><code>usage_events</code></td><td>Append-only metering, aggregated at invoice time</td></tr>
+    <tr><td>notifications</td><td><code>notifications</code></td><td><code>notifications</code></td><td>Email + webhook delivery log</td></tr>
+  </tbody>
+</table></div>
+
+<h4 id="arch-addressing">Addressing and ports</h4>
+
+<p class="annotatable">The gateway is the only thing the outside world sees. Internal services are private to the cluster and resolve by name. Replica counts, Ingress, and environments are owned by <a href="#infrastructure">Infrastructure &amp; Environments</a>.</p>
+
+<dl>
+  <dt>Public host</dt><dd>The gateway is served at <code>api.demo.co</code>; its Ingress terminates TLS.</dd>
+  <dt>Gateway port</dt><dd>The gateway listens on port <code>3000</code>; its readiness/liveness probe is <code>GET /healthz</code> on that port.</dd>
+  <dt>Internal services</dt><dd>Each resolves at <code>http://&lt;name&gt;.internal</code> inside the cluster and listens on container port <code>8080</code>. None has a public Ingress.</dd>
+</dl>
+
+<h3 id="arch-request-flow">How a request flows</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="wiki">Service catalog (wiki article 1008)</a>
+</div>
+
+<p class="annotatable">Every external call enters through the gateway, which authenticates it before forwarding. The <a class="ident" data-type="class" data-repo="platform">Gateway</a> class wires this up. Session and cookie detail is owned by <a href="#auth">Authentication &amp; Authorization</a>.</p>
+
+<ol>
+  <li><strong>Browser calls the gateway.</strong> A request hits <code>https://api.demo.co/&lt;service&gt;/...</code> carrying the <code>demo_session</code> cookie.</li>
+  <li><strong>Gateway verifies the session.</strong> <a class="ident" data-type="function" data-repo="platform">verifySession</a> rejects anything without a valid, unexpired session.</li>
+  <li><strong>Gateway proxies inward.</strong> <a class="ident" data-type="function" data-repo="platform">proxy</a> forwards to the internal service, adding <code>x-user-id</code> and <code>x-org-id</code> from the verified session.</li>
+  <li><strong>The service does its work.</strong> Scoped to that org, it queries its own schema and returns JSON.</li>
+</ol>
+
+<p class="annotatable">The gateway routes exactly four public prefixes, one per internal service:</p>
+
+<ul>
+  <li><code>/accounts</code></li>
+  <li><code>/billing</code></li>
+  <li><code>/usage</code></li>
+  <li><code>/notifications</code></li>
+</ul>
+
+<p class="annotatable">The health probe is the one exception to auth. <code>GET /healthz</code> is registered before <a class="ident" data-type="function" data-repo="platform">verifySession</a>, so it does not require a session; everything else does.</p>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Trust the header, never the body</span>Internal services trust <code>x-org-id</code> as set by the gateway and must never accept an <code>orgId</code> from the request body. Every query is scoped to the caller's org.</div>
+</div>
+
+<h3 id="arch-adrs">Why this shape (the ADRs)</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Architecture Decision Records (wiki article 1001)</a>
+</div>
+
+<p class="annotatable">Two decisions explain the whole map. The wiki (article 1001) is canonical for ADR numbering.</p>
+
+<dl>
+  <dt>ADR-001 — API gateway as the single entrypoint</dt>
+  <dd>All external traffic goes through one gateway; internal services are not publicly reachable and never call each other. The rationale is one place for auth, rate limiting, and audit logging.</dd>
+  <dt>ADR-002 — Schema-per-service in a shared Postgres</dt>
+  <dd>Each service owns its tables within one shared Postgres instance. Shared Postgres was chosen over database-per-service to keep ops simple at the current scale.</dd>
+</dl>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Numbering note</span>The platform doc <code>docs/architecture.md</code> swaps these two ADR numbers and uses different titles. The wiki is canonical for ADRs — follow the numbering above and do not trust the platform doc's numbers here.</div>
+</div>
+
+<p class="annotatable">Demo Co also practices trunk-based development, shipping from <code>main</code>. The exact ADR text for that practice is not in the available sources, so it is described as the practice only. Migrations live under <code>platform/services/&lt;name&gt;/migrations</code>, are applied by <code>make migrate</code>, and a service never migrates another's schema; see <a href="#database-migrations">Database Migrations</a>.</p>

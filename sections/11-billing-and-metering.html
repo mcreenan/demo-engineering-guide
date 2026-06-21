@@ -1,0 +1,156 @@
+<p class="lead annotatable">Every org is on one of three plans &mdash; <strong>free</strong>, <strong>team</strong>, or <strong>enterprise</strong> &mdash; each with a flat monthly price and a quota of included <strong>units</strong>. A unit is one metered action; usage above the quota is billed as <strong>overage</strong> on the next invoice, and customers are never cut off mid-cycle. This section is the canonical home for plans, invoices, overage math, and metering.</p>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">In short</span>Three plans (free / team / enterprise); money is integer cents, never floats; a unit is one metered action; usage events are append-only and aggregated per org per period; an invoice goes <code>draft</code>&rarr;<code>open</code>&rarr;<code>paid</code> (or <code>void</code>); the bill is base price plus overage; billing reads usage totals through the gateway, never the usage schema directly.</div>
+</div>
+
+<h3 id="billing-plans">The three plans</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/billing/migrations/001_init.sql</a>
+  <a data-kind="wiki">Service catalog (wiki article 1008)</a>
+  <a data-kind="help" href="https://help.demo.co/billing">Billing &amp; plans</a>
+</div>
+<p class="annotatable">Every org chooses from the same three plans. Each plan is a flat monthly price plus a quota of included units; the numbers below are consistent across the billing migration, the service catalog, and the Help Center.</p>
+<div class="table-wrapper"><table>
+  <thead><tr><th>Plan</th><th>Monthly price</th><th><code>monthly_price_cents</code></th><th>Included units</th></tr></thead>
+  <tbody>
+    <tr><td><code>free</code></td><td>$0</td><td><code>0</code></td><td>1,000</td></tr>
+    <tr><td><code>team</code></td><td>$49</td><td><code>4900</code></td><td>25,000</td></tr>
+    <tr><td><code>enterprise</code></td><td>$499</td><td><code>49900</code></td><td>500,000</td></tr>
+  </tbody>
+</table></div>
+<ul>
+  <li><strong>Money is integer cents.</strong> Prices are stored as <code>integer</code> cents on <code>billing.plans.monthly_price_cents</code> &mdash; never floats.</li>
+  <li><strong>Shared catalog.</strong> <code>billing.plans</code> has no <code>org_id</code>; it is the catalog of plan definitions, keyed by <code>id</code> with <code>name</code> constrained to <code>free | team | enterprise</code>. The full column-level schema is owned by <a href="#data-model">Core Domain &amp; Data Model</a>.</li>
+  <li><strong>Enterprise extras.</strong> SSO/SAML is an enterprise-only capability &mdash; see <a href="#auth">Authentication &amp; Authorization</a>.</li>
+</ul>
+<p class="annotatable">The TypeScript mirror is the <a class="ident" data-type="class" data-repo="platform">Plan</a> interface in <a class="gh-repo" data-repo="platform"></a>.</p>
+
+<h3 id="billing-units">Units &amp; metering</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/usage/index.ts</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/usage/migrations/001_init.sql</a>
+  <a data-kind="help" href="https://help.demo.co/usage-and-limits">Usage &amp; limits</a>
+</div>
+<p class="annotatable">A <strong>unit</strong> is one metered action. The <a class="ident" data-type="class" data-repo="platform">UsageService</a> records one row per action in <code>usage.usage_events</code>, an append-only event log &mdash; rows are only ever inserted, never updated or deleted.</p>
+<dl>
+  <dt><a class="ident" data-type="method" data-repo="platform">record</a>(orgId, units)</dt>
+  <dd>Appends an event: <code>INSERT INTO usage_events (org_id, units, occurred_at) VALUES ($1, $2, now())</code>. Other services record usage by calling the gateway, which routes to usage &mdash; never by calling usage directly.</dd>
+  <dt><a class="ident" data-type="method" data-repo="platform">totalForPeriod</a>(orgId, start, end)</dt>
+  <dd>Sums units in a half-open window: <code>SELECT COALESCE(SUM(units), 0) FROM usage_events WHERE org_id = $1 AND occurred_at &gt;= start AND occurred_at &lt; end</code>. This is what billing reads when finalizing an invoice.</dd>
+</dl>
+<ul>
+  <li><strong>Aggregated per org per period.</strong> The index <code>usage_events_by_org_time ON usage.usage_events (org_id, occurred_at)</code> serves exactly this summing pattern.</li>
+  <li><strong>Live count.</strong> Customers see a continuously updating usage figure on the dashboard at <strong>Dashboard &rarr; Usage</strong>.</li>
+  <li><strong>Resets each cycle.</strong> Usage resets at the start of each billing cycle.</li>
+  <li><strong>Never cut off.</strong> Customers are not cut off mid-cycle; usage above the included quota is billed as overage on the next invoice.</li>
+</ul>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Billing reads usage through the gateway</span>Billing and usage are separate services owning separate schemas, so billing never queries the <code>usage</code> schema directly. It asks the usage service for a period total over HTTP through the gateway when finalizing an invoice &mdash; the schema-per-service rule in <a href="#service-catalog">Platform Services</a> and <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>. Column-level usage schema is owned by <a href="#data-model">Core Domain &amp; Data Model</a>.</div>
+</div>
+
+<h3 id="billing-invoices">Invoices &amp; the state machine</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/billing/index.ts</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/billing/migrations/001_init.sql</a>
+  <a data-kind="help" href="https://help.demo.co/billing">Billing &amp; plans</a>
+</div>
+<p class="annotatable">An invoice belongs to an org and is generated per organization at the end of each billing cycle. It moves through a small four-state machine: from draft, to finalized and sent, to charged &mdash; or cancelled.</p>
+<dl>
+  <dt><code>draft</code></dt><dd>Billing cycle in progress.</dd>
+  <dt><code>open</code></dt><dd>Finalized and sent.</dd>
+  <dt><code>paid</code></dt><dd>Charged on a successful charge.</dd>
+  <dt><code>void</code></dt><dd>Cancelled.</dd>
+</dl>
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Invoice status</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">stateDiagram-v2
+  [*] --> draft : cycle in progress
+  draft --> open : finalizeInvoice<br/>(base + overage,<br/>invoice_receipt enqueued)
+  open --> paid : chargeInvoice succeeds
+  open --> void : cancelled
+  draft --> void : cancelled
+  note right of open : failed charge<br/>retries 7 days</pre></div>
+</div>
+<ul>
+  <li><strong>Amount.</strong> The invoice amount is the plan base price plus any overage above the included quota, stored in <code>amount_cents</code>.</li>
+  <li><strong>Lookups.</strong> Invoices are read with <code>invoicesForOrg</code> &mdash; <code>SELECT * FROM invoices WHERE org_id = $1 ORDER BY period_start DESC</code>, served by the index <code>invoices_by_org ON billing.invoices (org_id, period_start DESC)</code>.</li>
+  <li><strong>Status enum.</strong> The <code>status</code> column is constrained to <code>draft | open | paid | void</code> &mdash; full column detail in <a href="#data-model">Core Domain &amp; Data Model</a>.</li>
+</ul>
+<p class="annotatable">The TypeScript symbols are the <a class="ident" data-type="class" data-repo="platform">Invoice</a> interface and the <a class="ident" data-type="class" data-repo="platform">BillingService</a> methods <a class="ident" data-type="method" data-repo="platform">invoicesForOrg</a>, <a class="ident" data-type="method" data-repo="platform">finalizeInvoice</a>, and <a class="ident" data-type="method" data-repo="platform">chargeInvoice</a>.</p>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">"overdue" is not a status</span>The Help Center says a long-unpaid invoice is "marked overdue" after retries fail, but <code>overdue</code> is not a value in the <code>status</code> enum &mdash; the only statuses are <code>draft</code>, <code>open</code>, <code>paid</code>, and <code>void</code>. Treat "overdue" as Help Center phrasing, not a database state.</div>
+</div>
+
+<h3 id="billing-finalize">Finalizing an invoice: base + overage</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/billing/index.ts</a>
+  <a data-kind="help" href="https://help.demo.co/billing">Billing &amp; plans</a>
+</div>
+<p class="annotatable"><a class="ident" data-type="method" data-repo="platform">finalizeInvoice</a> closes out the current draft invoice for an org. Its documented steps:</p>
+<ol>
+  <li><strong>Load the plan.</strong> Read the org's plan (a join of <code>plans</code> and orgs) to get <code>monthlyPriceCents</code> and <code>includedUnits</code>.</li>
+  <li><strong>Get the usage total.</strong> Fetch the period total via <code>GET /usage/total?period=current</code> through the gateway.</li>
+  <li><strong>Compute overage.</strong> <code>overage = max(0, units - includedUnits) * unit price</code>.</li>
+  <li><strong>Compute the amount.</strong> <code>amount = monthlyPriceCents + overage</code>.</li>
+  <li><strong>Finalize.</strong> <code>UPDATE invoices SET amount_cents, status = 'open'</code>, moving the invoice <code>draft</code>&rarr;<code>open</code> and enqueuing an <code>invoice_receipt</code> notification.</li>
+</ol>
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Finalize: reads usage through the gateway</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">sequenceDiagram
+  participant B as BillingService
+  participant G as Gateway
+  participant U as UsageService
+  participant N as NotificationsService
+  B->>G: GET /usage/total?period=current
+  G->>U: route to usage
+  U-->>G: period total (units)
+  G-->>B: period total (units)
+  Note over B: overage = max(0, units - includedUnits) * unit price<br/>amount = monthlyPriceCents + overage<br/>status = open
+  B->>G: enqueue invoice_receipt
+  G->>N: route to notifications</pre></div>
+</div>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">The per-unit overage rate is not defined in the sources</span>Step 3 multiplies excess units by a unit price (<code>UNIT_PRICE_CENTS</code> in the code), but that constant is never assigned a value anywhere in the available sources. State the formula only &mdash; <code>overage = max(0, units - includedUnits) * unit price</code> &mdash; and do not assume a number for the per-unit rate.</div>
+</div>
+
+<h3 id="billing-charging">Charging &amp; retries</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/billing/index.ts</a>
+  <a data-kind="help" href="https://help.demo.co/billing">Billing &amp; plans</a>
+</div>
+<p class="annotatable"><a class="ident" data-type="method" data-repo="platform">chargeInvoice</a> attempts payment on an open invoice. On success it moves the invoice <code>open</code>&rarr;<code>paid</code>; a failed charge retries for 7 days.</p>
+<ul>
+  <li><strong>Success.</strong> The invoice transitions to <code>paid</code>.</li>
+  <li><strong>Failure.</strong> Failed charges retry for 7 days. The Help Center then describes the invoice as "overdue" &mdash; phrasing only, not a status (see the callout above). What happens after the retry window (suspension, etc.) is not specified in the available sources.</li>
+</ul>
+<p class="annotatable">The charge "calls the payment processor"; the specific processor or vendor is not named in the sources, though infra references a <code>billing-secrets/payments-api-key</code> secret &mdash; secret handling is owned by <a href="#security">Security &amp; Secrets</a>.</p>
+
+<h3 id="billing-changing">Changing plans &amp; usage alerts</h3>
+<div class="sources-data" hidden>
+  <a data-kind="help" href="https://help.demo.co/billing">Billing &amp; plans</a>
+  <a data-kind="help" href="https://help.demo.co/usage-and-limits">Usage &amp; limits</a>
+</div>
+<p class="annotatable">Customers manage their plan and payment card themselves; usage alerts are an opt-in email that the always-sent emails are not.</p>
+<dl>
+  <dt>Upgrade / downgrade</dt>
+  <dd>Change plan any time at <strong>Settings &rarr; Billing</strong>. Upgrades take effect immediately; downgrades take effect at the start of the next cycle.</dd>
+  <dt>Payment card</dt>
+  <dd>Updated at <strong>Settings &rarr; Billing</strong>.</dd>
+  <dt>Usage alerts (opt-in)</dt>
+  <dd>Owners and admins can turn on a usage alert at <strong>Settings &rarr; Notifications</strong> to get an email when usage crosses a threshold (the Help Center gives 80% of quota only as an example). This is optional, unlike invoice receipts, member invites, and payment-failed emails, which are always sent &mdash; see <a href="#notifications-and-webhooks">Notifications &amp; Webhooks</a>. Roles are defined in <a href="#auth">Authentication &amp; Authorization</a>.</dd>
+  <dt>Reconciliation</dt>
+  <dd>Invoices are reconciled against metered usage; if an invoice looks wrong, contact support.</dd>
+</dl>
+
+<div class="panel tip">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 10.5 8.5 14 15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Upgrading often beats overage</span>If an org regularly exceeds its quota, the Help Center guidance is that upgrading to a larger plan is usually cheaper than paying overage on every invoice.</div>
+</div>

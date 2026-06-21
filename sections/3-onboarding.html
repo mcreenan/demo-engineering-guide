@@ -1,0 +1,91 @@
+<p class="lead annotatable">This is the fast path from a fresh laptop to a shipped change: clone the three repos, boot the backend and frontend locally, then branch off <code>main</code>, open a small PR, get one review, and merge — a merge to <code>main</code> deploys to staging automatically.</p>
+
+<ul>
+  <li><strong>Learn the shape.</strong> Three repos — <a class="gh-repo" data-repo="platform"></a> (backend API), <a class="gh-repo" data-repo="web"></a> (frontend), and <a class="gh-repo" data-repo="infra"></a> (infrastructure and the deploy pipeline).</li>
+  <li><strong>Set up.</strong> Clone all three; run <code>make dev</code> in platform and <code>pnpm install &amp;&amp; pnpm dev</code> in web; join <code>#engineering</code> and <code>#incidents</code>.</li>
+  <li><strong>Ship.</strong> Branch off <code>main</code>, keep the PR small, get one approval, merge — staging deploys itself.</li>
+</ul>
+
+<h3>The system in one paragraph</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Engineering onboarding (wiki article 1004)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web</a>
+</div>
+
+<p class="annotatable">Demo Co runs on three repositories. <a class="gh-repo" data-repo="platform"></a> is the backend: Node + TypeScript services behind a single gateway, on one Postgres with a schema per service. <a class="gh-repo" data-repo="web"></a> is the frontend: Next.js apps built on shared <code>ui</code> and <code>api-client</code> packages. <a class="gh-repo" data-repo="infra"></a> holds the Terraform, Kubernetes manifests, and the deploy pipeline.</p>
+
+<p class="annotatable">The browser only ever talks to the gateway. The gateway authenticates every request and routes it to an internal service; internal services are not reachable from outside. For the full picture and the diagram, see <a href="#architecture">Architecture at a Glance</a>.</p>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Where the truth lives</span>The code in <a class="gh-repo" data-repo="platform"></a> and <a class="gh-repo" data-repo="web"></a> is authoritative for behavior — when the guide and the code disagree, the code wins. The Engineering Wiki is canonical for process and ADRs.</div>
+</div>
+
+<h3>Set up your machine</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Engineering onboarding (wiki article 1004)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web</a>
+</div>
+
+<p class="annotatable">Four steps get you to a running stack. The deep details — <code>DATABASE_URL</code>, the Node version, and the seed fixture — live in <a href="#local-development">Local Development</a>.</p>
+
+<ol>
+  <li><strong>Clone all three repos.</strong> <a class="gh-repo" data-repo="platform"></a>, <a class="gh-repo" data-repo="web"></a>, and <a class="gh-repo" data-repo="infra"></a>.</li>
+  <li><strong>Boot the backend.</strong> In platform, run <code>make dev</code>. It migrates and seeds a local Postgres, then starts every service with hot reload.</li>
+  <li><strong>Boot the frontend.</strong> In web, run <code>pnpm install &amp;&amp; pnpm dev</code>. The dashboard comes up on <code>:3000</code> (and the admin console on <code>:3001</code>).</li>
+  <li><strong>Join the channels.</strong> <code>#engineering</code> and <code>#incidents</code>.</li>
+</ol>
+
+<div class="codeblock"><pre><code><span class="cb-comment"># platform — migrate + seed, then start every service</span>
+make dev
+
+<span class="cb-comment"># web — all apps in parallel (dashboard :3000, admin :3001)</span>
+pnpm install &amp;&amp; pnpm dev
+
+<span class="cb-comment"># web — just one app</span>
+pnpm --filter dashboard dev</code></pre></div>
+
+<div class="panel tip">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 10.5 8.5 14 15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Requirements</span><code>make dev</code> needs <code>DATABASE_URL</code> set and Node 20 or newer. The seed loads one demo org, a few users, and the three plans, so the app has data to render on first run.</div>
+</div>
+
+<h3>Ship your first change</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Engineering onboarding (wiki article 1004)</a>
+  <a data-kind="wiki">Code review (wiki article 1005)</a>
+  <a data-kind="wiki">Release &amp; deployment (wiki article 1003)</a>
+</div>
+
+<p class="annotatable">Demo Co uses trunk-based development: branch off <code>main</code>, keep the PR small, get one review, and merge. A merge to <code>main</code> triggers CI, builds container images, and deploys to staging automatically — so every merge needs to be good enough to be live for customers tomorrow.</p>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">The first-change loop</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart LR
+  A[Branch off main] --> B[Small PR]
+  B --> C[One review<br/>approve]
+  C --> D[Merge to main]
+  D --> E[CI: test +<br/>build images]
+  E --> F[Auto-deploy<br/>to staging]
+  F -.-> G[Manual promote<br/>to production<br/>after ~30 min soak]</pre></div>
+</div>
+
+<h4>The bar to merge</h4>
+<p class="annotatable">A PR is ready to merge when it clears these. Each one is owned by a deeper section — follow the links for the full story.</p>
+
+<div class="table-wrapper"><table><thead><tr><th>Requirement</th><th>Where it lives</th></tr></thead><tbody>
+  <tr><td>Tests pass and are covered (they come with the change)</td><td><a href="#testing">Testing</a></td></tr>
+  <tr><td>One approval; no unresolved &ldquo;must fix&rdquo; comments</td><td><a href="#code-review">Code Review &amp; Pull Requests</a></td></tr>
+  <tr><td>Schema changes follow the migration runbook</td><td><a href="#database-migrations">Database Migrations</a></td></tr>
+</tbody></table></div>
+
+<p class="annotatable">When authoring a PR: keep it to one idea, write the <em>why</em> and how you verified it, and self-review before asking for eyes. The full norms are in <a href="#code-review">Code Review &amp; Pull Requests</a>.</p>
+
+<p class="annotatable">After staging, production is promoted manually following a soak of roughly 30 minutes. The pipeline, promotion, and rollback all belong to <a href="#release-and-deployment">Release &amp; Deployment</a>.</p>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">A good first change</span>Find a &ldquo;good first issue&rdquo; and pair with your onboarding buddy. The onboarding wiki cites an ADR for trunk-based development; follow that link in the wiki for the rationale rather than relying on this guide for it.</div>
+</div>

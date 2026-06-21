@@ -1,0 +1,116 @@
+<p class="lead annotatable">This is the living engineering guide for Demo Co &mdash; a single, self-contained page that summarizes how we build, run, and reason about our systems. It is written for the people <em>and</em> agents working in this repo, and it is built from source: you change the content files and rebuild, never the generated HTML.</p>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">In short</span>Edit a section's HTML fragment, run <code>pal build</code>, and the guide reassembles itself. The guide never contradicts the source of truth &mdash; if a change conflicts with a source, fix the source first.</div>
+</div>
+
+<h3>What this guide is</h3>
+<div class="sources-data" hidden>
+  <a>README.md (this project)</a>
+  <a>AGENTS.md (this project)</a>
+</div>
+<p class="annotatable">It is an engineering handbook for Demo Co, rendered as one self-contained HTML page built with the <code>palimpsest</code> tool. It is meant to be read end-to-end when you are new and dipped into as a reference afterward.</p>
+<p class="annotatable">The page ships with navigation and reading aids so you can find things fast:</p>
+<ul>
+  <li>A two-level table of contents and scrollspy that tracks where you are.</li>
+  <li>Section filtering to narrow the page to what you care about.</li>
+  <li>Pan/zoom Mermaid diagrams for architecture and flows.</li>
+  <li>Linked repo and code references that resolve to the real source.</li>
+  <li>An in-page <strong>Suggest a change</strong> flow that generates a ready-to-paste agent prompt.</li>
+</ul>
+
+<h3>How it is built</h3>
+<div class="sources-data" hidden>
+  <a>AGENTS.md (this project)</a>
+  <a>README.md (this project)</a>
+</div>
+<p class="annotatable">The guide is assembled from three inputs by the palimpsest engine, which also provides the page shell, components, and interactive behavior. The output is a single generated file that is overwritten on every build.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Input</th><th>Owns</th></tr></thead>
+  <tbody>
+    <tr><td><code>sections/&lt;n&gt;-&lt;slug&gt;.html</code></td><td>Content &mdash; one HTML fragment per section.</td></tr>
+    <tr><td><code>palimpsest.config.json</code></td><td>Structure &mdash; parts, sections, order, and titles. The TOC is generated from it.</td></tr>
+    <tr><td><code>theme/tokens.css</code></td><td>Design &mdash; semantic tokens for colors, fonts, and spacing.</td></tr>
+  </tbody>
+</table></div>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Build flow</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart LR
+  A["sections/*.html<br/>content"] --> P["pal build"]
+  B["palimpsest.config.json<br/>structure"] --> P
+  C["theme/tokens.css<br/>design"] --> P
+  E["palimpsest engine<br/>shell + behavior"] --> P
+  P --> O["demo-engineering-guide.html<br/>generated &mdash; never hand-edit"]</pre></div>
+</div>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Never hand-edit the generated HTML</span>The artifact <code>demo-engineering-guide.html</code> is overwritten on every build, so any direct edit is wasted work. Change the inputs above and rebuild instead.</div>
+</div>
+
+<h4>Common commands</h4>
+<p class="annotatable">The everyday workflow is three commands:</p>
+<div class="codeblock"><pre><code>pal build      <span class="cb-comment"># reassemble the guide</span>
+pal dev        <span class="cb-comment"># build, serve, and live-reload on change</span>
+pal validate   <span class="cb-comment"># lint section sources against the house style</span></code></pre></div>
+<p class="annotatable">Other commands exist for less frequent tasks:</p>
+<ul>
+  <li><code>pal outline</code> and <code>pal draft</code> &mdash; scaffold structure and section drafts.</li>
+  <li><code>pal theme import</code> &mdash; bring in design tokens.</li>
+  <li><code>pal publish</code> &mdash; publish the built guide.</li>
+  <li><code>pal source add|list|remove</code> &mdash; manage the registered sources of truth.</li>
+  <li><code>pal eject</code> &mdash; take ownership of the engine&apos;s shell and behavior.</li>
+</ul>
+
+<h4>Making a change</h4>
+<dl>
+  <dt>Change a section&apos;s content</dt>
+  <dd>Edit its <code>sections/&lt;n&gt;-&lt;slug&gt;.html</code> fragment, then run <code>pal build</code>.</dd>
+  <dt>Add, move, or rename sections</dt>
+  <dd>Edit the <code>structure</code> block in <code>palimpsest.config.json</code>, then rebuild.</dd>
+  <dt>Adjust the look</dt>
+  <dd>Change the semantic tokens in <code>theme/tokens.css</code>.</dd>
+</dl>
+
+<h3>The source-of-truth principle</h3>
+<div class="sources-data" hidden>
+  <a>AGENTS.md (this project)</a>
+  <a data-kind="wiki">Engineering Wiki</a>
+  <a data-kind="help" href="https://help.demo.co">Help Center</a>
+</div>
+<p class="annotatable">This guide <em>summarizes</em> authoritative sources; it must never contradict them. State only what the sources support, and when unsure, hedge or omit. The registered sources are recorded in <code>palimpsest.config.json</code> and managed with <code>pal source add|list|remove</code>.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Source</th><th>Authoritative for</th></tr></thead>
+  <tbody>
+    <tr><td>Engineering Wiki</td><td>ADRs, runbooks, and process.</td></tr>
+    <tr><td><a class="gh-repo" data-repo="platform"></a></td><td>How the backend system behaves &mdash; the code is the source of truth.</td></tr>
+    <tr><td><a class="gh-repo" data-repo="web"></a></td><td>What the product looks like and how the UI behaves.</td></tr>
+    <tr><td><a class="gh-repo" data-repo="infra"></a></td><td>How the system is run.</td></tr>
+    <tr><td>Help Center</td><td>Product-facing behavior, cited under <code>https://help.demo.co</code>.</td></tr>
+  </tbody>
+</table></div>
+
+<p class="annotatable">Each source is authoritative in its lane: the code (<a class="gh-repo" data-repo="platform"></a>, <a class="gh-repo" data-repo="web"></a>, <a class="gh-repo" data-repo="infra"></a>) is authoritative for behavior, the Engineering Wiki for ADRs and process, and the Help Center for product-facing behavior. On a Help Center conflict, update the help article first, then the guide.</p>
+
+<h3>How to use it &mdash; and how to suggest changes</h3>
+<div class="sources-data" hidden>
+  <a>AGENTS.md (this project)</a>
+</div>
+<p class="annotatable">Read it top to bottom your first time through, then use the TOC, scrollspy, and filtering to jump back to a topic when you need it. The in-page <strong>Suggest a change</strong> feature turns an idea into a ready-to-paste agent prompt that follows the rules below.</p>
+
+<p class="annotatable">Every suggestion is checked against the source of truth <em>first</em>:</p>
+<ol>
+  <li><strong>If it conflicts with a source.</strong> Stop &mdash; do not edit the guide. Record it in <code>changelog/</code> as &ldquo;blocked &mdash; conflicts with source&rdquo; and say which source to update first. The guide is updated only after the source is.</li>
+  <li><strong>If it is consistent with sources.</strong> Log it in <code>changelog/CHANGELOG.md</code> with status &ldquo;applied&rdquo; and an ISO timestamp, edit the named <code>sections/&lt;n&gt;-&lt;slug&gt;.html</code> fragment, then run <code>pal build</code>.</li>
+</ol>
+<div class="panel tip">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 10.5 8.5 14 15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Wording-only edits are exempt</span>Pure clarity, structure, or phrasing changes that alter no fact do not need a source check &mdash; just make them and rebuild.</div>
+</div>
+
+<h3>Where to go next</h3>
+<p class="annotatable">New here? Continue through the rest of Part I &mdash; Orientation: <a href="#architecture">Architecture at a Glance</a> for how the system fits together, then <a href="#onboarding">Engineering Onboarding</a> to get set up. For pointers to repos, dashboards, and other resources, see <a href="#key-links">Key Links &amp; Resources</a>.</p>

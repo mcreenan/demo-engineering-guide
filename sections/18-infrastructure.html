@@ -1,0 +1,230 @@
+<p class="lead annotatable">Demo Co runs on <strong>AWS in <code>us-east-1</code></strong>: one Terraform configuration in <a class="gh-repo" data-repo="infra"></a> describes two environments &mdash; staging and production &mdash; each an <strong>EKS</strong> cluster plus a shared <strong>Postgres</strong> instance, selected by Terraform workspace.</p>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">In short</span>One Terraform config, two workspaces (<code>staging</code> | <code>production</code>); remote state in S3 with a DynamoDB lock; never <code>terraform apply</code> to production from a laptop &mdash; prod applies go through CI; EKS <code>1.29</code>; one shared Postgres <code>16</code>, schema-per-service; the gateway is the only thing on the public internet (an ALB Ingress at <code>api.demo.co</code>), everything else lives in private subnets.</div>
+</div>
+
+<p class="annotatable">This section owns cloud, Kubernetes, and Terraform &mdash; how the system is <em>run</em>. The CI pipeline and rollback are owned by <a href="#release-and-deployment">Release &amp; Deployment</a>; the secrets policy is owned by <a href="#security">Security &amp; Secrets</a>; the request lifecycle is owned by <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>. <a class="gh-repo" data-repo="infra"></a> is authoritative for environments, networking, deploys, and on-call; app behavior lives in <a class="gh-repo" data-repo="platform"></a> and <a class="gh-repo" data-repo="web"></a>.</p>
+
+<h3 id="infra-topology">The topology at a glance</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra/terraform, infra/kubernetes</a>
+</div>
+
+<p class="annotatable">Everything lives inside one VPC (<code>10.0.0.0/16</code>). Only the gateway's load balancer is reachable from the internet; the cluster nodes and the database sit in private subnets, and the database accepts connections only from the cluster.</p>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">VPC topology (per environment)</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart TB
+  NET["Internet"] --> ALB
+  subgraph VPC["VPC 10.0.0.0/16"]
+    subgraph PUB["public subnets"]
+      ALB["ALB Ingress<br/>internet-facing, TLS<br/>host api.demo.co"]
+    end
+    subgraph PRIV["private subnets"]
+      GW["Gateway Deployment<br/>3 replicas - port 3000<br/>tier=edge"]
+      SVC["Internal Services<br/>accounts.internal,<br/>billing.internal, ...<br/>2 replicas - port 8080<br/>tier=internal"]
+      RDS["RDS Postgres 16<br/>rds-&lt;env&gt;<br/>SG: 5432 from cluster only"]
+    end
+  end
+  ALB -->|"TLS &rarr; gateway:80 &rarr; 3000"| GW
+  GW -->|"HTTP &rarr; svc.internal:8080"| SVC
+  SVC -->|"5432"| RDS</pre></div>
+</div>
+
+<p class="annotatable">Internal services never accept outside traffic and resolve only inside the cluster as <code>&lt;name&gt;.internal</code> &mdash; a cross-service read goes back out through the gateway (the proxy in <a class="gh-repo" data-repo="platform"></a> resolves those names). The gateway-as-single-entrypoint rationale is owned by <a href="#architecture">Architecture at a Glance</a>.</p>
+
+<h3 id="infra-terraform">Terraform: one config, two workspaces</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra/terraform/main.tf, infra/README.md</a>
+</div>
+
+<p class="annotatable">Terraform requires version <code>&gt;= 1.6</code> with the AWS provider <code>~&gt; 5.0</code>. There is one config for both environments; the <strong>workspace</strong> picks which one you are operating on, and the code reads it as <code>local.env = terraform.workspace</code> &mdash; one of two values.</p>
+
+<dl>
+  <dt>State</dt>
+  <dd>Remote, in S3: bucket <code>demo-co-tfstate</code>, key <code>platform/terraform.tfstate</code>, <code>encrypt = true</code>, with a DynamoDB lock table <code>demo-co-tflock</code>. One state file per environment, selected by workspace.</dd>
+  <dt>Default tags</dt>
+  <dd>Applied to every resource: <code>Owner = platform-team</code>, <code>Environment = terraform.workspace</code>, <code>ManagedBy = terraform</code>.</dd>
+  <dt>Naming</dt>
+  <dd>Resources are named from <code>local.name = "demo-&lt;env&gt;"</code>; a <code>local.is_prod</code> flag (<code>env == "production"</code>) drives the prod-only sizing and safety toggles below.</dd>
+</dl>
+
+<p class="annotatable">The local workflow is read-only: select the workspace, plan, and review. The <a class="gh-repo" data-repo="infra"></a> repo is laid out by concern:</p>
+
+<dl>
+  <dt><code>terraform/</code></dt>
+  <dd>The config &mdash; <code>main.tf</code>, <code>network.tf</code>, <code>eks.tf</code>, <code>rds.tf</code>.</dd>
+  <dt><code>kubernetes/</code></dt>
+  <dd>The manifests applied to the cluster by the deploy pipeline.</dd>
+  <dt><code>.github/workflows/deploy.yml</code></dt>
+  <dd>The CI pipeline (owned by <a href="#release-and-deployment">Release &amp; Deployment</a>).</dd>
+  <dt><code>runbooks/</code></dt>
+  <dd>Operational runbooks &mdash; <code>deploys.md</code>, <code>incident-response.md</code>.</dd>
+</dl>
+
+<div class="codeblock"><pre><code><span class="cb-comment"># review staging locally — plan only, never apply prod from here</span>
+terraform workspace select staging
+terraform plan</code></pre></div>
+
+<div class="panel danger">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M6.7 2.75h6.6l4.95 4.95v6.6l-4.95 4.95H6.7L1.75 14.3V7.7L6.7 2.75Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 6.5v4.2M10 13.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Never apply production from a laptop</span>Production <code>terraform apply</code> happens in CI, not on your machine. Locally you select the staging workspace and run <code>terraform plan</code> to review a change &mdash; the apply path for production is the pipeline.</div>
+</div>
+
+<h3 id="infra-environments">The two environments</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra/README.md, infra/runbooks/deploys.md</a>
+</div>
+
+<p class="annotatable">Two environments, identical shape, different sizing. Staging takes every merge to <code>main</code>; production takes a tagged <code>v*</code> release. How that promotion flows is owned by <a href="#release-and-deployment">Release &amp; Deployment</a> &mdash; this section only states what each environment <em>is</em>.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Environment</th><th>Cluster</th><th>Database</th><th>Deployed from</th></tr></thead>
+  <tbody>
+    <tr><td>staging</td><td><code>eks-staging</code></td><td><code>rds-staging</code></td><td>Every merge to <code>main</code></td></tr>
+    <tr><td>production</td><td><code>eks-prod</code></td><td><code>rds-prod</code></td><td>A tagged <code>v*</code> release</td></tr>
+  </tbody>
+</table></div>
+
+<h3 id="infra-eks">EKS cluster and node group</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra/terraform/eks.tf</a>
+</div>
+
+<p class="annotatable">Each environment runs an EKS cluster named <code>eks-&lt;env&gt;</code> on Kubernetes <code>1.29</code>. The cluster spans both private and public subnets; the worker node group, named <code>default</code>, runs only in the private subnets.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Setting</th><th>production</th><th>staging</th></tr></thead>
+  <tbody>
+    <tr><td>Node instance type</td><td><code>m6i.large</code></td><td><code>t3.large</code></td></tr>
+    <tr><td>Desired nodes</td><td>4</td><td>2</td></tr>
+    <tr><td>Min nodes</td><td>2</td><td>2</td></tr>
+    <tr><td>Max nodes</td><td>10</td><td>4</td></tr>
+  </tbody>
+</table></div>
+
+<p class="annotatable">The cluster and node IAM roles (<code>aws_iam_role.cluster</code>, <code>aws_iam_role.node</code>) are referenced from <code>eks.tf</code>, but their policy definitions are not in the provided files &mdash; treat their exact permissions as unknown.</p>
+
+<h3 id="infra-rds">RDS: one shared Postgres per environment</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra/terraform/rds.tf, infra/terraform/main.tf</a>
+</div>
+
+<p class="annotatable">Each environment has a single Postgres instance (<code>rds-&lt;env&gt;</code>, engine <code>postgres</code> version <code>16</code>) shared by every service, with one schema per service. Column-level schema is owned by <a href="#data-model">Core Domain &amp; Data Model</a>; this section covers the instance itself.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Setting</th><th>production</th><th>staging</th></tr></thead>
+  <tbody>
+    <tr><td>Instance class</td><td><code>db.r6g.xlarge</code></td><td><code>db.t4g.medium</code></td></tr>
+    <tr><td>Allocated storage</td><td>200 GB</td><td>20 GB</td></tr>
+    <tr><td>Multi-AZ</td><td>yes</td><td>no</td></tr>
+    <tr><td>Backup retention</td><td>30 days</td><td>7 days</td></tr>
+    <tr><td>Deletion protection</td><td>enabled</td><td>disabled</td></tr>
+    <tr><td>Final snapshot on destroy</td><td>taken</td><td>skipped</td></tr>
+  </tbody>
+</table></div>
+
+<p class="annotatable">The prod-only behaviors all key off the <code>local.is_prod</code> flag &mdash; multi-AZ, deletion protection, and the final-snapshot decision are derived from it:</p>
+
+<ul>
+  <li><strong>Multi-AZ.</strong> <code>local.multi_az = is_prod</code> &mdash; on in prod, off in staging.</li>
+  <li><strong>Final snapshot.</strong> <code>skip_final_snapshot = !is_prod</code> &mdash; staging skips it, prod takes one on destroy.</li>
+  <li><strong>Deletion protection.</strong> Enabled in prod only.</li>
+</ul>
+
+<p class="annotatable">The instance database and master user are both named <code>platform</code>, and <code>manage_master_user_password = true</code> &mdash; so the credential is created and stored in AWS Secrets Manager rather than set in the config. The database sits in a subnet group spread across the private subnets.</p>
+
+<h3 id="infra-networking">Networking: public edge, private everything</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra/terraform/network.tf</a>
+</div>
+
+<p class="annotatable">The VPC is a <code>10.0.0.0/16</code> network with DNS hostnames enabled. It has two public subnets and two private subnets, each pair spread across two availability zones (chosen dynamically), so the only thing exposed to the internet is the load balancer.</p>
+
+<dl>
+  <dt>Public subnets &mdash; for the load balancer</dt>
+  <dd><code>10.0.0.0/24</code> and <code>10.0.1.0/24</code>, with <code>map_public_ip_on_launch</code> set. These host the ALB that fronts the gateway.</dd>
+  <dt>Private subnets &mdash; for the cluster and database</dt>
+  <dd><code>10.0.10.0/24</code> and <code>10.0.11.0/24</code>. The EKS node group and the RDS instance live here; neither is internet-reachable.</dd>
+  <dt>Database security group</dt>
+  <dd>Ingress allows Postgres (<code>5432/tcp</code>) only from the cluster security group &mdash; the database is reachable only from the cluster, nothing else.</dd>
+</dl>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">What the sources show &mdash; and don't</span><code>network.tf</code> defines the VPC, subnets, and the <code>db</code> and <code>cluster</code> security groups. It does not include NAT gateway, internet gateway, or route-table resources, so the exact egress mechanics for the private subnets are not described here.</div>
+</div>
+
+<h3 id="infra-manifests">Kubernetes manifests</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra/kubernetes/gateway.yaml, accounts.yaml, billing.yaml</a>
+</div>
+
+<p class="annotatable">The manifests under <code>kubernetes/</code> are applied to the cluster by the deploy pipeline. There are two shapes: the public gateway (a Deployment plus a Service plus an ALB Ingress) and internal services (a Deployment plus an internal Service, no Ingress).</p>
+
+<h4 id="infra-gateway-manifest">Gateway &mdash; the only public exposure</h4>
+
+<p class="annotatable">The gateway is a Deployment of three replicas that is the only workload with an Ingress:</p>
+
+<dl>
+  <dt>Deployment</dt>
+  <dd><code>replicas: 3</code>, labels <code>app: gateway, tier: edge</code>, listening on container port <code>3000</code>.</dd>
+  <dt>Readiness probe</dt>
+  <dd><code>httpGet /healthz</code> on port <code>3000</code>, <code>initialDelaySeconds: 5</code>.</dd>
+  <dt>Service</dt>
+  <dd>Maps port <code>80</code> to target port <code>3000</code>.</dd>
+  <dt>Ingress</dt>
+  <dd>Annotated <code>kubernetes.io/ingress.class: alb</code> and <code>alb.ingress.kubernetes.io/scheme: internet-facing</code>; host <code>api.demo.co</code>, path <code>/</code> (Prefix) routes to <code>gateway:80</code>. It terminates TLS for that host.</dd>
+  <dt>Session store</dt>
+  <dd><code>SESSION_REDIS_URL</code> comes from a <code>secretKeyRef</code> &mdash; Secret <code>gateway-secrets</code>, key <code>redis-url</code>.</dd>
+</dl>
+
+<h4 id="infra-internal-manifest">Internal services &mdash; the repeated pattern</h4>
+
+<p class="annotatable">Internal services all follow one shape and resolve only as <code>&lt;name&gt;.internal</code> inside the cluster:</p>
+
+<ul>
+  <li><strong>Deployment.</strong> <code>replicas: 2</code>, label <code>tier: internal</code>.</li>
+  <li><strong>Port.</strong> Listens on container port <code>8080</code>; the Service maps <code>80</code> to <code>8080</code>.</li>
+  <li><strong>No Ingress.</strong> Never exposed to the internet &mdash; only the gateway is.</li>
+</ul>
+
+<p class="annotatable">The two internal manifests present in the sources are <code>accounts.yaml</code> and <code>billing.yaml</code>:</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Service</th><th>Image</th><th>Resolves as</th><th>Secrets (via <code>secretKeyRef</code>)</th></tr></thead>
+  <tbody>
+    <tr><td>gateway</td><td><code>ghcr.io/demo-co/platform-gateway</code></td><td>public, <code>api.demo.co</code></td><td><code>gateway-secrets/redis-url</code></td></tr>
+    <tr><td>accounts</td><td><code>ghcr.io/demo-co/platform-accounts</code></td><td><code>accounts.internal</code></td><td><code>platform-db/url</code></td></tr>
+    <tr><td>billing</td><td><code>ghcr.io/demo-co/platform-billing</code></td><td><code>billing.internal</code></td><td><code>platform-db/url</code>, <code>billing-secrets/payments-api-key</code></td></tr>
+  </tbody>
+</table></div>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Only three manifests exist in the sources</span>The sources contain manifests for gateway, accounts, and billing only. The usage and notifications services are expected to follow the same internal pattern (2 replicas, internal Service, no Ingress, <code>&lt;name&gt;.internal</code>), but their manifests are not in the provided files &mdash; don't rely on per-service detail for them. Likewise, only the gateway declares a readiness probe; internal-service probes are not shown.</div>
+</div>
+
+<h4 id="infra-secrets">Secrets reach pods as env vars</h4>
+
+<p class="annotatable">Every secret is injected as an environment variable through a Kubernetes <code>secretKeyRef</code> &mdash; the manifest names a Secret and a key, and Kubernetes binds the value into the container env:</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Env var</th><th>Secret</th><th>Key</th></tr></thead>
+  <tbody>
+    <tr><td><code>SESSION_REDIS_URL</code></td><td><code>gateway-secrets</code></td><td><code>redis-url</code></td></tr>
+    <tr><td><code>DATABASE_URL</code></td><td><code>platform-db</code></td><td><code>url</code></td></tr>
+    <tr><td><code>PAYMENTS_API_KEY</code></td><td><code>billing-secrets</code></td><td><code>payments-api-key</code></td></tr>
+  </tbody>
+</table></div>
+
+<p class="annotatable">That is the delivery <em>mechanism</em> only. The policy &mdash; AWS Secrets Manager as the source of truth, rotation on a schedule, and never committing a secret to git &mdash; is owned by <a href="#security">Security &amp; Secrets</a>.</p>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Manifests pin <code>:latest</code>; the pipeline ships SHA tags</span>The committed manifests reference <code>:latest</code> images, while the deploy pipeline builds and pushes images tagged with the commit SHA. How <code>kubectl apply</code> reconciles the SHA tag into the manifest at deploy time is not shown in the sources &mdash; for the deploy mechanics see <a href="#release-and-deployment">Release &amp; Deployment</a>.</div>
+</div>
+
+<p class="annotatable">For watching pods, reading gateway logs, and the CloudWatch RDS checks on-call leans on, see <a href="#observability-and-on-call">Observability &amp; On-Call</a>.</p>

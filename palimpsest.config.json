@@ -1,0 +1,202 @@
+{
+  "name": "demo-engineering-guide",
+  "title": "Demo Engineering Guide",
+  "org": {
+    "name": "Demo Co",
+    "githubOrg": "demo-co"
+  },
+  "theme": "./theme/tokens.css",
+  "output": {
+    "inline": false
+  },
+  "structure": [
+    {
+      "part": "I — Orientation",
+      "sections": [
+        {
+          "num": 1,
+          "slug": "about",
+          "title": "About This Guide"
+        },
+        {
+          "num": 2,
+          "slug": "architecture",
+          "title": "Architecture at a Glance"
+        },
+        {
+          "num": 3,
+          "slug": "onboarding",
+          "title": "Engineering Onboarding"
+        }
+      ]
+    },
+    {
+      "part": "II — Building",
+      "sections": [
+        {
+          "num": 4,
+          "slug": "service-catalog",
+          "title": "Platform Services"
+        },
+        {
+          "num": 5,
+          "slug": "data-model",
+          "title": "Core Domain & Data Model"
+        },
+        {
+          "num": 6,
+          "slug": "gateway-and-request-flow",
+          "title": "The Gateway & Request Flow"
+        },
+        {
+          "num": 7,
+          "slug": "auth",
+          "title": "Authentication & Authorization"
+        },
+        {
+          "num": 8,
+          "slug": "local-development",
+          "title": "Local Development"
+        },
+        {
+          "num": 9,
+          "slug": "backend-development",
+          "title": "Backend Development"
+        },
+        {
+          "num": 10,
+          "slug": "frontend-development",
+          "title": "Frontend Development"
+        },
+        {
+          "num": 11,
+          "slug": "billing-and-metering",
+          "title": "Billing, Plans & Usage Metering"
+        },
+        {
+          "num": 12,
+          "slug": "notifications-and-webhooks",
+          "title": "Notifications & Webhooks"
+        }
+      ]
+    },
+    {
+      "part": "III — Shipping",
+      "sections": [
+        {
+          "num": 13,
+          "slug": "coding-standards",
+          "title": "Coding Standards & Conventions"
+        },
+        {
+          "num": 14,
+          "slug": "testing",
+          "title": "Testing"
+        },
+        {
+          "num": 15,
+          "slug": "code-review",
+          "title": "Code Review & Pull Requests"
+        },
+        {
+          "num": 16,
+          "slug": "database-migrations",
+          "title": "Database Migrations"
+        },
+        {
+          "num": 17,
+          "slug": "release-and-deployment",
+          "title": "Release & Deployment"
+        }
+      ]
+    },
+    {
+      "part": "IV — Supporting and Maintaining",
+      "sections": [
+        {
+          "num": 18,
+          "slug": "infrastructure",
+          "title": "Infrastructure & Environments"
+        },
+        {
+          "num": 19,
+          "slug": "observability-and-on-call",
+          "title": "Observability & On-Call"
+        },
+        {
+          "num": 20,
+          "slug": "incident-response",
+          "title": "Incident Response & Postmortems"
+        },
+        {
+          "num": 21,
+          "slug": "security",
+          "title": "Security & Secrets"
+        }
+      ]
+    },
+    {
+      "part": "V — References",
+      "sections": [
+        {
+          "num": 22,
+          "slug": "glossary",
+          "title": "Glossary"
+        },
+        {
+          "num": 23,
+          "slug": "key-links",
+          "title": "Key Links & Resources"
+        }
+      ]
+    }
+  ],
+  "suggest": {
+    "conventionsDoc": "AGENTS.md"
+  },
+  "sources": [
+    {
+      "name": "wiki",
+      "type": "wiki",
+      "title": "Engineering Wiki",
+      "description": "Canonical home for architecture decisions (ADRs), runbooks, and process.",
+      "instructions": "Capabilities: search, get-content — via helper scripts in ./source-scripts\n(an example of wrapping an external system as small CLI tools).\n- Search: `./source-scripts/wiki-search \"<query>\"` → prints matching \"<id>\\t<title>\" lines.\n- Get content: `./source-scripts/wiki-get-article <id>` → prints the article content.\n- Cite articles by title + id. The guide summarises these; never contradict them.\n- (Demo: the scripts grep local sample files under sources/docs/wiki; in a real\n  project they'd call the wiki's API with the same input/output contract.)"
+    },
+    {
+      "name": "platform",
+      "type": "repo",
+      "title": "platform",
+      "description": "The backend API monorepo (Node + TypeScript, Postgres) — authoritative for how the system behaves.",
+      "path": "sources/code/platform",
+      "linkBase": "https://github.com/demo-co/platform",
+      "instructions": "Authoritative for how the system actually behaves (the code is the source of truth).\n- Local checkout: `sources/code/platform` — grep/read it to verify behavior.\n- Freshness: confirm the clone is current (`git -C sources/code/platform log -1 --format=%cr`) before trusting an absence.\n- Link in the guide as <a class=\"gh-repo\" data-repo=\"platform\"></a>; deep references resolve under https://github.com/demo-co/platform. Repo-root links only."
+    },
+    {
+      "name": "web",
+      "type": "repo",
+      "title": "web",
+      "description": "The frontend monorepo (Next.js apps + shared packages) — authoritative for what the product looks like.",
+      "path": "sources/code/web",
+      "linkBase": "https://github.com/demo-co/web",
+      "instructions": "Authoritative for how the system actually behaves (the code is the source of truth).\n- Local checkout: `sources/code/web` — grep/read it to verify behavior.\n- Freshness: confirm the clone is current (`git -C sources/code/web log -1 --format=%cr`) before trusting an absence.\n- Link in the guide as <a class=\"gh-repo\" data-repo=\"web\"></a>; deep references resolve under https://github.com/demo-co/web. Repo-root links only."
+    },
+    {
+      "name": "infra",
+      "type": "repo",
+      "title": "infra",
+      "description": "Core infrastructure (Terraform, Kubernetes, CI/CD) — authoritative for how the system is run.",
+      "path": "sources/code/infra",
+      "linkBase": "https://github.com/demo-co/infra",
+      "instructions": "Authoritative for how the system actually behaves (the code is the source of truth).\n- Local checkout: `sources/code/infra` — grep/read it to verify behavior.\n- Freshness: confirm the clone is current (`git -C sources/code/infra log -1 --format=%cr`) before trusting an absence.\n- Link in the guide as <a class=\"gh-repo\" data-repo=\"infra\"></a>; deep references resolve under https://github.com/demo-co/infra. Repo-root links only."
+    },
+    {
+      "name": "help-center",
+      "type": "help",
+      "title": "Help Center",
+      "description": "Customer-facing help articles (an Astro content repo).",
+      "path": "sources/docs/help-center",
+      "linkBase": "https://help.demo.co",
+      "instructions": "Authoritative for product-facing behavior (help/marketing content).\n- Local checkout: `sources/docs/help-center` — search the article source (e.g. Astro/Markdown content).\n- Cite the published article URL under https://help.demo.co.\n- On conflict: update the help article first, then the guide."
+    }
+  ]
+}

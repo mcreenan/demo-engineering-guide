@@ -1,0 +1,211 @@
+<p class="lead annotatable">The frontend lives in the <a class="gh-repo" data-repo="web"></a> repo: a pnpm monorepo of two Next.js apps (a customer dashboard and an internal admin console) built on two shared packages (a component library and a typed gateway client). Every app reaches the backend through one client and reuses one set of UI primitives — apps own routes and page composition, the packages own everything reusable.</p>
+
+<ul>
+  <li><strong>Two apps.</strong> <code>apps/dashboard</code> is the signed-in customer app (billing, members, usage) on dev port <code>:3000</code>; <code>apps/admin</code> is the internal Demo Co staff console on <code>:3001</code>.</li>
+  <li><strong>Two packages.</strong> <a class="ident" data-type="module" data-repo="web">@demo/ui</a> holds shared components and design tokens; <a class="ident" data-type="module" data-repo="web">@demo/api-client</a> is the one typed wrapper over the gateway.</li>
+  <li><strong>Three rules of the road.</strong> Apps never call <code>fetch</code> directly, never hand-roll UI primitives, and talk only to the gateway — no direct database access.</li>
+  <li><strong>Source of truth.</strong> This repo is authoritative for what the product looks like and how the UI behaves; for business rules (what a plan includes, how an invoice is computed) the <a class="gh-repo" data-repo="platform"></a> repo wins.</li>
+  <li><strong>Stack.</strong> Next.js ^14.2, React ^18.3, pnpm 9, Node &gt;= 20.</li>
+</ul>
+
+<h3 id="frontend-layout">Monorepo layout</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web</a>
+</div>
+
+<p class="annotatable">The root <code>package.json</code> declares two pnpm workspace globs, <code>apps/*</code> and <code>packages/*</code>. Apps are the deployable Next.js surfaces; packages are the reusable internals that both apps share.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Workspace</th><th>Package</th><th>What it is</th></tr></thead>
+  <tbody>
+    <tr><td><code>apps/dashboard</code></td><td>—</td><td>The main customer app: billing, members, usage — what a signed-in user lands in. Dev server on <code>:3000</code>.</td></tr>
+    <tr><td><code>apps/admin</code></td><td>—</td><td>Internal Demo Co staff console for support and account operations. Not customer-facing. Dev server on <code>:3001</code>.</td></tr>
+    <tr><td><code>packages/ui</code></td><td><a class="ident" data-type="module" data-repo="web">@demo/ui</a></td><td>Shared component library (Button, Table, badges) plus design tokens — &ldquo;nothing reimplements a button.&rdquo;</td></tr>
+    <tr><td><code>packages/api-client</code></td><td><a class="ident" data-type="module" data-repo="web">@demo/api-client</a></td><td>A typed wrapper around the gateway API — &ldquo;one place that knows the endpoints, so apps don't hand-roll fetch calls.&rdquo;</td></tr>
+  </tbody>
+</table></div>
+
+<p class="annotatable">Both apps depend on the two packages as <code>workspace:*</code> dependencies. Both packages are private and declare a <code>react ^18.3.0</code> peer dependency. The at-a-glance topology of how these connect to the gateway is owned by <a href="#architecture">Architecture at a Glance</a>.</p>
+
+<h3 id="frontend-rules">Rules of the road</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web</a>
+</div>
+
+<p class="annotatable">Three conventions keep the apps thin and the shared layer authoritative. They are the heart of this section.</p>
+
+<ol>
+  <li><strong>Apps never call <code>fetch</code> directly.</strong> All backend access goes through <a class="ident" data-type="module" data-repo="web">@demo/api-client</a>, the single typed map of the gateway's endpoints. If an endpoint isn't in the client, add it there first.</li>
+  <li><strong>Apps never hand-roll UI primitives.</strong> Buttons, tables, inputs, and design tokens live in <a class="ident" data-type="module" data-repo="web">@demo/ui</a>. An app that needs a new primitive contributes it upstream rather than forking one locally.</li>
+  <li><strong>The gateway is the only backend.</strong> The frontend has no direct database access and no knowledge of internal services — it sees one API surface at <code>https://api.demo.co</code>. Auth is a session cookie set during login.</li>
+</ol>
+
+<div class="panel tip">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 10.5 8.5 14 15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Apps own routes; packages own reuse</span>An app's job is routing and page-level composition. Anything reusable — an endpoint shape, a component, a token — belongs in a package so it has exactly one definition.</div>
+</div>
+
+<h3 id="frontend-data-flow">Data flow for a page</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web</a>
+</div>
+
+<p class="annotatable">A typical page never sees a URL or a raw response. It calls a hook, the client talks to the gateway, and the page renders the typed result with shared components. The billing page is the representative example.</p>
+
+<ol>
+  <li><strong>Page calls a hook.</strong> A page in <code>apps/dashboard</code> renders and calls a hook from the client, e.g. <a class="ident" data-type="function" data-repo="web">useInvoices</a>.</li>
+  <li><strong>Client issues the request.</strong> The api-client sends <code>GET /billing/invoices</code> against the gateway with the session cookie (<code>credentials: "include"</code>).</li>
+  <li><strong>Gateway authenticates and routes.</strong> The gateway verifies the session and forwards to the billing service — request-lifecycle detail is owned by <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>.</li>
+  <li><strong>Page renders.</strong> The result comes back typed, and the page renders it with components from <a class="ident" data-type="module" data-repo="web">@demo/ui</a> (Table, Money, StatusBadge).</li>
+</ol>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Page data flow</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart LR
+  P["dashboard page<br/>useInvoices()"] --> C["api-client<br/>GET /billing/invoices<br/>credentials: include"]
+  C --> G["gateway<br/>api.demo.co<br/>verifySession + route"]
+  G --> S["billing service"]
+  S --> P2["render with @demo/ui<br/>Table, Money, StatusBadge"]
+  G -. "401" .-> E["SessionExpiredError<br/>thrown in api-client"]</pre></div>
+</div>
+
+<h3 id="frontend-api-client">The api-client: the one place that knows the gateway</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web</a>
+</div>
+
+<p class="annotatable"><a class="ident" data-type="module" data-repo="web">@demo/api-client</a> is the only place in the frontend that knows endpoint URLs and shapes. Its public surface exports the typed <a class="ident" data-type="constant" data-repo="web">api</a> object, the <a class="ident" data-type="class" data-repo="web">SessionExpiredError</a>, the types, and a hook per endpoint — apps import these and never call <code>fetch</code> themselves.</p>
+
+<dl>
+  <dt>Base URL</dt>
+  <dd><code>process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000"</code> — the gateway base, defaulting to the local dev gateway.</dd>
+  <dt>Auth</dt>
+  <dd>The session cookie, sent automatically because every request uses <code>credentials: "include"</code>.</dd>
+  <dt>Fetch wrapper</dt>
+  <dd><a class="ident" data-type="function" data-repo="web">get</a> calls <code>fetch(BASE + path, { credentials: "include" })</code>. A <code>401</code> throws <a class="ident" data-type="class" data-repo="web">SessionExpiredError</a>; any other non-ok response throws an <code>Error</code> of the form <code>${path} → ${status}</code>.</dd>
+  <dt>Typed methods</dt>
+  <dd><code>api.listInvoices()</code> &rarr; <code>GET /billing/invoices</code>; <code>api.listMembers()</code> &rarr; <code>GET /accounts/members</code>.</dd>
+  <dt>Hooks</dt>
+  <dd><a class="ident" data-type="function" data-repo="web">useInvoices</a>, <a class="ident" data-type="function" data-repo="web">useMembers</a>, <a class="ident" data-type="function" data-repo="web">useInviteMember</a>, <a class="ident" data-type="function" data-repo="web">useOrgSearch</a>.</dd>
+</dl>
+
+<p class="annotatable">Every hook follows the same pattern that <a class="ident" data-type="function" data-repo="web">useInvoices</a> demonstrates: call the typed client, then expose <code>{ data, isLoading, error }</code>. The other hooks mirror that shape.</p>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Hook implementations are elided in the sample</span>The sample sources note that real hooks use the app's data-fetching library, which is elided here. The library is not named in the available sources, so treat the concrete implementation as an unknown — only the <code>{ data, isLoading, error }</code> contract is given. Session expiry and the <code>demo_session</code> cookie are owned by <a href="#auth">Authentication &amp; Authorization</a>.</div>
+</div>
+
+<h4 id="frontend-types">Typed shapes mirror the backend enums</h4>
+
+<p class="annotatable">The client declares the shapes it returns, and their enum values match the backend exactly. The badge helpers in the UI library render these same enums, so labels never drift from the data model.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Type</th><th>Fields</th></tr></thead>
+  <tbody>
+    <tr><td><a class="ident" data-type="class" data-repo="web">Invoice</a></td><td><code>id</code>, <code>amountCents</code>, <code>status</code> (<code>draft</code> | <code>open</code> | <code>paid</code> | <code>void</code>), <code>periodStart</code>, <code>periodEnd</code></td></tr>
+    <tr><td><a class="ident" data-type="class" data-repo="web">Member</a></td><td><code>id</code>, <code>email</code>, <code>role</code> (<code>owner</code> | <code>admin</code> | <code>member</code>), <code>isCurrentUser</code></td></tr>
+  </tbody>
+</table></div>
+
+<p class="annotatable">The column-level schema and the enum definitions these mirror are owned by <a href="#data-model">Core Domain &amp; Data Model</a>; invoice statuses and overage are owned by <a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a>.</p>
+
+<h3 id="frontend-ui">The ui package: one button, one table, shared badges</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web</a>
+</div>
+
+<p class="annotatable"><a class="ident" data-type="module" data-repo="web">@demo/ui</a> exports the shared primitives every app imports. Variants, sizing, and badge colors all come from the design tokens — do not reimplement these inside an app.</p>
+
+<dl>
+  <dt><a class="ident" data-type="class" data-repo="web">Button</a></dt>
+  <dd>The one button. Props: <code>children</code>, <code>onClick?</code>, <code>href?</code>, <code>variant?</code> (<code>primary</code> | <code>secondary</code> | <code>ghost</code>), <code>disabled?</code>. Renders an <code>&lt;a&gt;</code> when <code>href</code> is set, otherwise a <code>&lt;button&gt;</code>.</dd>
+  <dt><a class="ident" data-type="class" data-repo="web">Table</a></dt>
+  <dd>The shared data table. Props: <code>columns</code>, <code>rows</code>, <code>empty?</code>. It renders the <code>empty</code> text in place of the body when there are no rows.</dd>
+  <dt><a class="ident" data-type="function" data-repo="web">Money</a></dt>
+  <dd>Renders integer cents as <code>$${(cents/100).toFixed(2)}</code> — cents in, formatted out. Money never uses floats for storage.</dd>
+  <dt><a class="ident" data-type="function" data-repo="web">StatusBadge</a></dt>
+  <dd>The invoice status pill for <code>draft</code> | <code>open</code> | <code>paid</code> | <code>void</code>. Colors come from tokens; labels match the backend.</dd>
+  <dt><a class="ident" data-type="function" data-repo="web">RoleBadge</a></dt>
+  <dd>The member role pill for <code>owner</code> | <code>admin</code> | <code>member</code>.</dd>
+</dl>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Design tokens</span>Button variants, sizing, and badge colors are driven by design tokens referenced as <code>tokens.css</code>. The actual token names and values are not present in the available sources — treat them as an unknown rather than inventing names.</div>
+</div>
+
+<h3 id="frontend-pages">Representative pages</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web</a>
+</div>
+
+<p class="annotatable">Three pages show the conventions in practice — each pulls data through a hook and renders it with shared components.</p>
+
+<h4 id="frontend-billing-page">Dashboard billing</h4>
+
+<p class="annotatable"><code>apps/dashboard/src/pages/billing.tsx</code> uses <a class="ident" data-type="function" data-repo="web">useInvoices</a> plus Table, Money, and StatusBadge. It is read-only and mirrors the billing service's invoice model — the status values shown are exactly the backend's.</p>
+
+<dl>
+  <dt>Columns</dt>
+  <dd>Period, Amount, Status.</dd>
+  <dt>Statuses shown</dt>
+  <dd><code>draft</code>, <code>open</code>, <code>paid</code>, <code>void</code> — exactly the backend enum.</dd>
+  <dt>Empty state</dt>
+  <dd>&ldquo;No invoices yet — your first one is generated at the end of the cycle.&rdquo;</dd>
+  <dt>Out of scope</dt>
+  <dd>Plan changes and card updates live on the Settings &rarr; Billing route, not this page.</dd>
+</dl>
+
+<h4 id="frontend-members-page">Dashboard members</h4>
+
+<p class="annotatable"><code>apps/dashboard/src/pages/members.tsx</code> uses <a class="ident" data-type="function" data-repo="web">useMembers</a> and <a class="ident" data-type="function" data-repo="web">useInviteMember</a> with Table, Button, and RoleBadge. Roles match the accounts service — owner, admin, member — and render through RoleBadge. The invite control is shown only when <code>canInvite = role === "owner" || role === "admin"</code>.</p>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Hiding a control is convenience, not security</span>The UI hides the invite button from plain members, but the backend enforces the same rule — so the hidden button is convenience only. Roles are enforced server-side; see <a href="#auth">Authentication &amp; Authorization</a>.</div>
+</div>
+
+<h4 id="frontend-admin-page">Admin home</h4>
+
+<p class="annotatable"><code>apps/admin/src/pages/index.tsx</code> uses <a class="ident" data-type="function" data-repo="web">useOrgSearch</a> with Table and Button so Demo Co staff can look up a customer org for support tickets. Columns: Org, Plan, Members, plus a trailing action column whose Button opens the org.</p>
+
+<p class="annotatable">It is internal only: access is gated behind staff SSO at the gateway. The admin app reads the same API as the customer dashboard but with a staff session that can act across orgs, and it never touches the database directly. The staff-session and SSO mechanics are owned by <a href="#auth">Authentication &amp; Authorization</a>.</p>
+
+<h3 id="frontend-local-dev">Running the frontend locally</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web</a>
+</div>
+
+<p class="annotatable">Install once with pnpm, then run all apps in parallel or filter to one. The broader local-dev story (including the platform backend) is owned by <a href="#local-development">Local Development</a>.</p>
+
+<div class="codeblock"><pre><code>pnpm install
+pnpm dev                      <span class="cb-comment"># dashboard :3000, admin :3001 in parallel</span>
+pnpm --filter dashboard dev   <span class="cb-comment"># run just one app</span>
+pnpm test</code></pre></div>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Script</th><th>Runs</th></tr></thead>
+  <tbody>
+    <tr><td><code>dev</code></td><td><code>pnpm -r --parallel dev</code></td></tr>
+    <tr><td><code>build</code></td><td><code>pnpm -r build</code></td></tr>
+    <tr><td><code>test</code></td><td><code>vitest run</code></td></tr>
+    <tr><td><code>lint</code></td><td><code>eslint apps packages</code></td></tr>
+  </tbody>
+</table></div>
+
+<p class="annotatable">Tooling versions: pnpm is pinned via <code>packageManager</code> to <code>pnpm@9.1.0</code>, engines require <code>Node &gt;= 20</code>, and dev dependencies include eslint ^9.3.0, typescript ^5.4.5, and vitest ^1.6.0. Conventions for these are owned by <a href="#coding-standards">Coding Standards &amp; Conventions</a> and <a href="#testing">Testing</a>.</p>
+
+<h3 id="frontend-env">Environment variables</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web</a>
+</div>
+
+<dl>
+  <dt><code>NEXT_PUBLIC_API_URL</code></dt>
+  <dd>The gateway base URL. Defaults to the local dev gateway (<code>http://localhost:3000</code>) when unset.</dd>
+  <dt><code>NEXT_PUBLIC_ENV</code></dt>
+  <dd>One of <code>development</code> | <code>staging</code> | <code>production</code>.</dd>
+</dl>
+
+<p class="annotatable">Staging and production builds are deployed from the infra repo's pipeline — that path is owned by <a href="#release-and-deployment">Release &amp; Deployment</a> and <a href="#infrastructure">Infrastructure &amp; Environments</a>.</p>

@@ -1,0 +1,132 @@
+<p class="lead annotatable">Demo Co notifies people by <strong>email</strong> and notifies systems by <strong>webhook</strong>. Both go through one service, the <a class="ident" data-type="class" data-repo="platform">NotificationsService</a> in <a class="gh-repo" data-repo="platform"></a>: a service enqueues a notification through the gateway, then a background worker delivers it and records the outcome, retrying failures with backoff.</p>
+
+<ul>
+  <li><strong>Two channels.</strong> <code>email</code> for people, <code>webhook</code> for systems.</li>
+  <li><strong>Four templates.</strong> <code>invoice_receipt</code>, <code>member_invite</code>, <code>usage_alert</code>, <code>payment_failed</code>.</li>
+  <li><strong>Always-sent vs. optional.</strong> Receipts, invites, and payment-failed emails can't be turned off; usage alerts are a toggle.</li>
+  <li><strong>Async by design.</strong> <a class="ident" data-type="method" data-repo="platform">enqueue</a> returns immediately; <a class="ident" data-type="method" data-repo="platform">deliverPending</a> does the actual sending.</li>
+  <li><strong>Webhooks.</strong> Register an endpoint, choose events, verify the <code>Demo-Signature</code> header, return <code>2xx</code> quickly.</li>
+</ul>
+
+<h3>Channels and templates</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="help" href="https://help.demo.co/notifications">Notifications &amp; webhooks</a>
+</div>
+
+<p class="annotatable">The service owns exactly one table, <a href="#data-model"><code>notifications.notifications</code></a>. Every notification has a channel and a template:</p>
+
+<dl>
+  <dt>Channel</dt>
+  <dd><code>email | webhook</code> &mdash; how it's delivered. The channel is chosen when the notification is enqueued and defaults to <code>email</code>.</dd>
+  <dt>Template</dt>
+  <dd>Names which message is being sent (see the table below).</dd>
+</dl>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Template</th><th>When it fires</th></tr></thead>
+  <tbody>
+    <tr><td><code>invoice_receipt</code></td><td>When an invoice is paid</td></tr>
+    <tr><td><code>member_invite</code></td><td>When you're added to an org</td></tr>
+    <tr><td><code>payment_failed</code></td><td>When a charge doesn't go through</td></tr>
+    <tr><td><code>usage_alert</code></td><td>When you cross a usage threshold</td></tr>
+  </tbody>
+</table></div>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Triggered from other services</span>Billing and accounts don't send mail themselves &mdash; they enqueue a notification. <a class="ident" data-type="method" data-repo="platform">finalizeInvoice</a> enqueues an <code>invoice_receipt</code>, and creating a user enqueues a <code>member_invite</code>. Plans, invoices, and overage are owned by <a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a>.</div>
+</div>
+
+<h3>Which emails always send</h3>
+<div class="sources-data" hidden>
+  <a data-kind="help" href="https://help.demo.co/notifications">Notifications &amp; webhooks</a>
+</div>
+
+<p class="annotatable">Three transactional emails are mandatory because they carry account-critical information. One is optional and lives behind a toggle at <code>Settings &rarr; Notifications</code>.</p>
+
+<dl>
+  <dt>Invoice receipts &mdash; always sent</dt>
+  <dd>Sent when an invoice is paid.</dd>
+  <dt>Member invites &mdash; always sent</dt>
+  <dd>Sent when you're added to an org.</dd>
+  <dt>Payment failed &mdash; always sent</dt>
+  <dd>Sent if a charge doesn't go through.</dd>
+  <dt>Usage alerts &mdash; optional</dt>
+  <dd>Sent when you cross a usage threshold; toggle at <code>Settings &rarr; Notifications</code>.</dd>
+</dl>
+
+<p class="annotatable">Owners and admins can turn the usage alert on at <code>Settings &rarr; Notifications</code>; role rules are owned by <a href="#auth">Authentication &amp; Authorization</a>. The Help Center describes the alert firing when usage crosses a threshold (for example, 80% of quota); how usage is metered is owned by <a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a>.</p>
+
+<h3>The delivery model</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="help" href="https://help.demo.co/notifications">Notifications &amp; webhooks</a>
+</div>
+
+<p class="annotatable">Delivery is split into two halves so that enqueuing is fast and sending is resilient. Producing services never deliver inline; they hand off a row and move on.</p>
+
+<dl>
+  <dt><a class="ident" data-type="method" data-repo="platform">enqueue</a><code>(orgId, template, channel = "email")</code></dt>
+  <dd>Inserts a row with status <code>pending</code> and returns immediately; the channel defaults to <code>email</code>.</dd>
+  <dt><a class="ident" data-type="method" data-repo="platform">deliverPending</a></dt>
+  <dd>The worker tick. It claims pending rows, sends them, and marks each <code>sent</code> or <code>failed</code>; failures are retried with backoff.</dd>
+</dl>
+
+<p class="annotatable">A row's <code>status</code> moves through <code>pending &rarr; sent</code> or <code>pending &rarr; failed</code>. The worker claims work safely with row-level locking so two workers never grab the same row:</p>
+
+<div class="codeblock"><pre><code><span class="cb-comment">-- deliverPending claims a batch of due work</span>
+SELECT * FROM notifications.notifications
+WHERE status = 'pending'
+FOR UPDATE SKIP LOCKED;</code></pre></div>
+
+<p class="annotatable">A partial index, <code>notifications_pending</code>, keeps that poll cheap by indexing only the pending rows. The full column-level schema is owned by <a href="#data-model">Core Domain &amp; Data Model</a>.</p>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Enqueue and deliver</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart LR
+  svc[Service<br/>billing / accounts / usage] -->|enqueue via gateway| gw[Gateway<br/>POST /notifications]
+  gw --> tbl[(notifications table<br/>status = pending)]
+  worker[Delivery worker<br/>deliverPending] -->|SELECT ... FOR UPDATE<br/>SKIP LOCKED| tbl
+  worker --> sent[status = sent]
+  worker --> failed[status = failed]
+  failed -.->|retry with backoff| worker
+  worker -->|webhook, signed| ep[Customer endpoint]
+  ep -->|2xx = sent| sent
+  ep -.->|non-2xx / slow = failed<br/>retry up to 24h| failed</pre></div>
+</div>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Enqueue goes through the gateway</span>Services never call each other directly; the gateway routes <code>/notifications</code> to the service via its proxy. The request lifecycle is owned by <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>, and the service entry by <a href="#service-catalog">Platform Services</a>.</div>
+</div>
+
+<h3>Webhooks</h3>
+<div class="sources-data" hidden>
+  <a data-kind="help" href="https://help.demo.co/notifications">Notifications &amp; webhooks</a>
+</div>
+
+<p class="annotatable">Webhooks let a customer's systems react to events. Set them up at <code>Settings &rarr; Notifications &rarr; Webhooks</code>. Events are delivered as JSON.</p>
+
+<ol>
+  <li><strong>Add an endpoint URL.</strong> Register where deliveries should be sent.</li>
+  <li><strong>Choose which events to send.</strong> Pick from invoices, usage alerts, and member changes.</li>
+  <li><strong>Verify each delivery.</strong> Check the signature in the <code>Demo-Signature</code> header before trusting the payload.</li>
+</ol>
+
+<p class="annotatable">A <strong>Recent deliveries</strong> view on the same settings page shows what was sent and the response received, which is the first place to look when an endpoint isn't reacting.</p>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Return 2xx quickly or it's a retry</span>Your endpoint must return a <code>2xx</code> response fast. Slow or error responses are treated as failures and retried with backoff for up to 24 hours. Do heavy work asynchronously and acknowledge first.</div>
+</div>
+
+<div class="panel tip">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 10.5 8.5 14 15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Always verify the signature</span>Treat every payload as untrusted until you've verified the <code>Demo-Signature</code> header. Signature verification and secret handling are owned by <a href="#security">Security &amp; Secrets</a>.</div>
+</div>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Not documented here</span>The sources don't specify the signature algorithm, the exact backoff schedule, the worker's polling interval, the webhook payload shape, or a canonical list of event identifiers (only the categories invoices, usage alerts, and member changes). Don't assume values that aren't in the Help Center or the code.</div>
+</div>

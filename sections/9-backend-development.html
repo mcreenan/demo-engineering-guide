@@ -1,0 +1,175 @@
+<p class="lead annotatable">The backend is a Node + TypeScript monorepo in <a class="gh-repo" data-repo="platform"></a>, where each service is a class — <a class="ident" data-type="class" data-repo="platform">Gateway</a>, <a class="ident" data-type="class" data-repo="platform">AccountsService</a>, <a class="ident" data-type="class" data-repo="platform">BillingService</a>, <a class="ident" data-type="class" data-repo="platform">UsageService</a>, and <a class="ident" data-type="class" data-repo="platform">NotificationsService</a> — and every service method is scoped to an org passed in by the gateway, never read from a request body.</p>
+
+<ul>
+  <li><strong>Stack.</strong> Node &gt;= 20, TypeScript, express, pg, and zod, organized as npm workspaces under <code>services/*</code>.</li>
+  <li><strong>One iron rule.</strong> Methods take <code>orgId</code> as the first argument; downstream services trust the gateway's <code>x-org-id</code> header and ignore any <code>orgId</code> in the body.</li>
+  <li><strong>Internal addressing.</strong> Services resolve at <code>&lt;name&gt;.internal</code> inside the cluster and listen on container port <code>8080</code>; the gateway listens on <code>3000</code>.</li>
+  <li><strong>Tooling.</strong> typecheck is <code>tsc --build</code>, tests are vitest, lint is eslint — all driven by the <code>Makefile</code>.</li>
+</ul>
+
+<h3 id="bd-stack">Stack &amp; layout</h3>
+
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/package.json</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/Makefile</a>
+</div>
+
+<p class="annotatable"><a class="gh-repo" data-repo="platform"></a> is a single npm-workspaces monorepo (<code>"workspaces": ["services/*"]</code>) on one shared Postgres. Each service is its own workspace and owns its own schema; no service reads another's tables.</p>
+
+<div class="table-wrapper"><table><thead><tr><th>Dependency</th><th>Version</th><th>Role</th></tr></thead><tbody>
+  <tr><td><code>express</code></td><td>^4.19.2</td><td>HTTP server / routing</td></tr>
+  <tr><td><code>pg</code></td><td>^8.12.0</td><td>Postgres client</td></tr>
+  <tr><td><code>zod</code></td><td>^3.23.8</td><td>Runtime input validation</td></tr>
+  <tr><td><code>typescript</code></td><td>^5.4.5</td><td>Types + build (dev)</td></tr>
+  <tr><td><code>vitest</code></td><td>^1.6.0</td><td>Test runner (dev)</td></tr>
+</tbody></table></div>
+
+<p class="annotatable">The runtime floor is <code>node &gt;= 20</code> (the <code>engines</code> field). For getting Postgres up and seeded locally, see <a href="#local-development">Local Development</a>.</p>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Config files not in the sources</span>The scripts declare <code>tsc --build</code> and <code>eslint services</code>, but no root <code>tsconfig.json</code> or eslint config is present in the available sources. Run the commands as documented; the conventions they enforce live in <a href="#coding-standards">Coding Standards &amp; Conventions</a>.</div>
+</div>
+
+<h3 id="bd-service-class">The service-as-class pattern</h3>
+
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/gateway/app.ts</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/accounts/index.ts</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/docs/architecture.md</a>
+</div>
+
+<p class="annotatable">Each service is implemented as a single class. The <a class="ident" data-type="class" data-repo="platform">Gateway</a> is the only publicly-exposed service: it authenticates every request, then routes to an internal service. Internal services are never reachable directly from outside the cluster and never call each other directly — a cross-service read comes back out through the gateway.</p>
+
+<div class="table-wrapper"><table><thead><tr><th>Class</th><th>Key methods</th></tr></thead><tbody>
+  <tr><td><a class="ident" data-type="class" data-repo="platform">AccountsService</a></td><td><code>listMembers(orgId)</code>, <code>inviteMember(orgId, email, role)</code>, <code>setRole(orgId, userId, role)</code>, <code>createOrg(name, ownerEmail)</code></td></tr>
+  <tr><td><a class="ident" data-type="class" data-repo="platform">BillingService</a></td><td><code>invoicesForOrg(orgId)</code>, <code>finalizeInvoice(orgId)</code>, <code>chargeInvoice(invoiceId)</code></td></tr>
+  <tr><td><a class="ident" data-type="class" data-repo="platform">UsageService</a></td><td><code>record(orgId, units)</code>, <code>totalForPeriod(orgId, start, end)</code></td></tr>
+  <tr><td><a class="ident" data-type="class" data-repo="platform">NotificationsService</a></td><td><code>enqueue(orgId, template, channel)</code>, <code>deliverPending()</code></td></tr>
+</tbody></table></div>
+
+<p class="annotatable">For the per-service schema/port table see <a href="#service-catalog">Platform Services</a>, and for column-level schema see <a href="#data-model">Core Domain &amp; Data Model</a>.</p>
+
+<h3 id="bd-org-scoping">Org-scoping: never trust a body orgId</h3>
+
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/gateway/proxy.ts</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/accounts/index.ts</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/docs/architecture.md</a>
+</div>
+
+<p class="annotatable">This is the central backend convention. Every service method is scoped to an org, and the only trusted source of that org is the gateway. After the gateway verifies the session, its proxy attaches two identity headers from that session — <code>x-user-id</code> and <code>x-org-id</code> — and downstream services scope every query to the verified org.</p>
+
+<ul>
+  <li><strong>Take <code>orgId</code> first.</strong> Method signatures lead with <code>orgId</code> so scoping is unmissable.</li>
+  <li><strong>Trust the header, not the body.</strong> Scope queries to <code>x-org-id</code>; never read an <code>orgId</code> from the request body.</li>
+  <li><strong>It is a security invariant.</strong> A missing org scope is a security bug — see <a href="#security">Security &amp; Secrets</a>.</li>
+</ul>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Never trust an orgId from a request body</span>The verified org comes from the session, relayed as <code>x-org-id</code>. Reading an org identifier the client could set would let one tenant read another's data.</div>
+</div>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Org-scoped call path</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">sequenceDiagram
+  participant B as Browser
+  participant G as Gateway :3000
+  participant S as Service .internal:8080
+  participant P as Postgres
+  B->>G: GET /usage/... (demo_session cookie)
+  G->>G: verifySession (401 if none/expired)
+  G->>S: proxy + x-org-id, x-user-id
+  S->>S: method(orgId, ...) scoped to x-org-id
+  S->>P: query own schema only
+  P-->>B: status relayed back through gateway</pre></div>
+</div>
+
+<p class="annotatable">The proxy builds the base URL from the service name with no explicit port in code, copies the method, sets the JSON content type plus the two identity headers, sends the body as JSON for non-GET requests, and relays the upstream status and text. The container port <code>8080</code> comes from the Kubernetes manifests in <a class="gh-repo" data-repo="infra"></a>, not from the proxy code.</p>
+
+<dl>
+  <dt>Base URL</dt>
+  <dd>Built as <code>http://&lt;service&gt;.internal</code> — bare hostname, no port literal in the code.</dd>
+  <dt>Headers added</dt>
+  <dd>The JSON content type plus <code>x-org-id</code> and <code>x-user-id</code> from the verified session.</dd>
+  <dt>Body</dt>
+  <dd>Forwarded as JSON for non-GET requests; GET requests carry no body.</dd>
+</dl>
+
+<p class="annotatable">The full request lifecycle and <code>verifySession</code> detail live in <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a> and <a href="#auth">Authentication &amp; Authorization</a>.</p>
+
+<h3 id="bd-usage">Append-only usage events</h3>
+
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/usage/index.ts</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/billing/index.ts</a>
+</div>
+
+<p class="annotatable">The <code>usage_events</code> table is append-only: <code>record(orgId, units)</code> inserts a row, and events are never updated or deleted. <code>totalForPeriod(orgId, start, end)</code> sums units across a half-open time window, and that total is what billing reads.</p>
+
+<ul>
+  <li><strong>Write.</strong> <code>record</code> appends an event with <code>occurred_at = now()</code>; corrections are new events, not edits.</li>
+  <li><strong>Read.</strong> <code>totalForPeriod</code> returns the summed units for an org over the requested window.</li>
+  <li><strong>Billing reads through the gateway.</strong> When finalizing an invoice, <a class="ident" data-type="class" data-repo="platform">BillingService</a> fetches the usage total from the usage service via the gateway (<code>GET /usage/total?period=current</code>) — it never queries the usage schema directly.</li>
+</ul>
+
+<p class="annotatable">Overage math and plan/unit pricing belong to <a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a>.</p>
+
+<h3 id="bd-notifications">Notifications: enqueue + delivery worker</h3>
+
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/services/notifications/index.ts</a>
+</div>
+
+<p class="annotatable">Notifications split into two halves. <code>enqueue(orgId, template, channel)</code> inserts a pending row and returns immediately; a background worker tick, <code>deliverPending()</code>, claims and sends pending rows, marking each sent or failed with retry and backoff.</p>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Enqueue then deliver</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart LR
+  A[enqueue] --> B[notifications row<br/>status = pending]
+  B --> C[deliverPending<br/>FOR UPDATE SKIP LOCKED]
+  C --> D[sent / failed<br/>retry w/ backoff]</pre></div>
+</div>
+
+<p class="annotatable">The worker selects pending rows with <code>FOR UPDATE SKIP LOCKED</code> so concurrent ticks do not double-send. The enums are fixed:</p>
+
+<dl>
+  <dt>Channels</dt>
+  <dd><code>email</code> and <code>webhook</code>.</dd>
+  <dt>Templates</dt>
+  <dd><code>invoice_receipt</code>, <code>member_invite</code>, <code>usage_alert</code>, and <code>payment_failed</code>.</dd>
+  <dt>Status</dt>
+  <dd><code>pending</code>, <code>sent</code>, and <code>failed</code>.</dd>
+</dl>
+
+<p class="annotatable">Channel and template behavior plus webhook signing are owned by <a href="#notifications-and-webhooks">Notifications &amp; Webhooks</a>.</p>
+
+<h3 id="bd-tooling">Local commands &amp; tooling</h3>
+
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/package.json</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform/Makefile</a>
+</div>
+
+<p class="annotatable"><code>make dev</code> is the one command you need day to day: it migrates and seeds a local Postgres, then starts every service with hot reload. The other targets map to the standard checks.</p>
+
+<div class="table-wrapper"><table><thead><tr><th>Task</th><th>Command</th><th>Underneath</th></tr></thead><tbody>
+  <tr><td>Run everything</td><td><code>make dev</code></td><td>migrate + seed, then <code>npm run dev --workspaces --if-present</code></td></tr>
+  <tr><td>Type-check</td><td><code>npm run typecheck</code></td><td><code>tsc --build</code></td></tr>
+  <tr><td>Test</td><td><code>make test</code></td><td><code>vitest run</code></td></tr>
+  <tr><td>Lint</td><td><code>make lint</code></td><td><code>eslint services</code></td></tr>
+  <tr><td>Migrate</td><td><code>make migrate</code></td><td><code>migrate.sh</code> per service: accounts &rarr; billing &rarr; usage &rarr; notifications</td></tr>
+</tbody></table></div>
+
+<div class="codeblock"><pre><code><span class="cb-comment"># typecheck, lint, and test before opening a PR</span>
+npm run typecheck
+npx eslint services
+npx vitest run</code></pre></div>
+
+<p class="annotatable">Migrations apply per service in filename order, and each service owns its own schema — mechanics and the expand/contract rule are in <a href="#database-migrations">Database Migrations</a>. Tests come with the change as part of the merge bar; see <a href="#testing">Testing</a>.</p>
+
+<div class="panel tip">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 10.5 8.5 14 15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Let the linter handle style</span>Spend review on correctness and tests, not formatting — eslint and the type-checker carry the style load. The full conventions live in <a href="#coding-standards">Coding Standards &amp; Conventions</a>.</div>
+</div>

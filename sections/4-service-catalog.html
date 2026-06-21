@@ -1,0 +1,148 @@
+<p class="lead annotatable">The platform backend is five services in one <a class="gh-repo" data-repo="platform"></a> monorepo: a public <strong>gateway</strong> and four internal services (<strong>accounts</strong>, <strong>billing</strong>, <strong>usage</strong>, <strong>notifications</strong>). Each internal service owns its own Postgres schema, and only the gateway is reachable from outside the cluster.</p>
+
+<ul>
+  <li><strong>Catalog (owned here).</strong> One row per service: what schema it owns and what it is responsible for.</li>
+  <li><strong>Three rules.</strong> Only the gateway is public; internal services trust the <code>x-org-id</code> header; no service reads another's tables.</li>
+  <li><strong>The code is the source of truth.</strong> Symbols live under <code>platform/services/&lt;name&gt;</code>; this catalog is the map.</li>
+</ul>
+
+<h3>Service catalog</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Service catalog (wiki article 1008)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+</div>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Service</th><th>Owns (schema.tables)</th><th>Responsibility</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>gateway</td>
+      <td>&mdash;</td>
+      <td>Public edge: auth + routing</td>
+    </tr>
+    <tr>
+      <td>accounts</td>
+      <td><a href="#data-model"><code>accounts.orgs</code></a>, <a href="#data-model"><code>accounts.users</code></a></td>
+      <td>Identity, orgs, membership, roles</td>
+    </tr>
+    <tr>
+      <td>billing</td>
+      <td><a href="#data-model"><code>billing.plans</code></a>, <a href="#data-model"><code>billing.invoices</code></a></td>
+      <td>Plans, invoices, payment</td>
+    </tr>
+    <tr>
+      <td>usage</td>
+      <td><a href="#data-model"><code>usage.usage_events</code></a></td>
+      <td>Metering; aggregated at invoice time</td>
+    </tr>
+    <tr>
+      <td>notifications</td>
+      <td><a href="#data-model"><code>notifications.notifications</code></a></td>
+      <td>Transactional email + webhooks</td>
+    </tr>
+  </tbody>
+</table></div>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">The code is the source of truth</span>Every symbol below lives under <code>platform/services/&lt;name&gt;</code>; this catalog is the map. Column-level schema is owned by <a href="#data-model">Core Domain &amp; Data Model</a>, and the at-a-glance picture by <a href="#architecture">Architecture at a Glance</a>.</div>
+</div>
+
+<h3>The three rules</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Service catalog (wiki article 1008)</a>
+  <a data-kind="wiki">Architecture Decision Records (wiki article 1001)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+</div>
+
+<ol>
+  <li><strong>Only the gateway is publicly reachable.</strong> Internal services are not exposed outside the cluster; all external traffic enters through the one edge. This is the gateway-as-single-entrypoint decision recorded in <a href="#architecture">Architecture at a Glance</a>.</li>
+  <li><strong>Internal services trust <code>x-org-id</code> and scope every query to it.</strong> The gateway sets the header from the verified session; services must <em>not</em> accept an <code>orgId</code> from the request body. See <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a> and <a href="#security">Security &amp; Secrets</a>.</li>
+  <li><strong>No service reads another's tables.</strong> A cross-service read goes back out through the gateway over HTTP &mdash; for example, billing asks usage for a period total when finalizing an invoice. This is the schema-per-service decision (also in <a href="#architecture">Architecture at a Glance</a>).</li>
+</ol>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Service ownership</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart LR
+  web[Browser] -->|public| gw[Gateway]
+  gw --> acc[accounts]
+  gw --> bil[billing]
+  gw --> usg[usage]
+  gw --> ntf[notifications]
+  acc --> accdb[(accounts<br/>schema)]
+  bil --> bildb[(billing<br/>schema)]
+  usg --> usgdb[(usage<br/>schema)]
+  ntf --> ntfdb[(notifications<br/>schema)]
+  bil -.->|reads period total<br/>via gateway| gw
+  ntf -->|email / webhooks| out[Outbound]</pre></div>
+</div>
+
+<h3>Per-service detail</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Service catalog (wiki article 1008)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+</div>
+
+<h4>Gateway</h4>
+<p class="annotatable">The <a class="ident" data-type="class" data-repo="platform">Gateway</a> is an express app and the single public entrypoint. Its constructor wires three things in order:</p>
+<ol>
+  <li><strong>Health probe.</strong> <code>/healthz</code> with no auth &mdash; the liveness/readiness probe.</li>
+  <li><strong>Session check.</strong> <a class="ident" data-type="method" data-repo="platform">verifySession</a> gates everything else.</li>
+  <li><strong>Proxy.</strong> <a class="ident" data-type="method" data-repo="platform">proxy</a> forwards the public prefixes <code>/accounts</code>, <code>/billing</code>, <code>/usage</code>, and <code>/notifications</code> to the internal services, adding <code>x-user-id</code> and <code>x-org-id</code> from the verified session.</li>
+</ol>
+<p class="annotatable">The gateway listens on port <code>3000</code>, and internal services resolve at <code>http://&lt;name&gt;.internal</code> inside the cluster. The full request lifecycle is owned by <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>; networking, replicas, and container ports by <a href="#infrastructure">Infrastructure &amp; Environments</a>.</p>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Design intent vs. implemented</span>The single-entrypoint decision names the gateway as the one place for auth, rate limiting, and audit logging. The read service files implement auth, routing, and the health probe; rate limiting and audit logging are design intent here &mdash; see <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>.</div>
+</div>
+
+<h4>Accounts</h4>
+<p class="annotatable">The <a class="ident" data-type="class" data-repo="platform">AccountsService</a> owns identity, orgs, membership, and roles. The role type is <code>owner | admin | member</code>, and the first user of an org is always its owner.</p>
+<dl>
+  <dt><a class="ident" data-type="method" data-repo="platform">listMembers</a></dt>
+  <dd>Returns the members of an org.</dd>
+  <dt><a class="ident" data-type="method" data-repo="platform">createOrg</a></dt>
+  <dd>Creates an org; the creating user becomes its owner.</dd>
+  <dt><a class="ident" data-type="method" data-repo="platform">inviteMember</a></dt>
+  <dd>Owners/admins only; enqueues a <code>member_invite</code> notification through the gateway.</dd>
+  <dt><a class="ident" data-type="method" data-repo="platform">setRole</a></dt>
+  <dd>Changes a member's role; transferring ownership demotes the previous owner to admin, keeping exactly one owner per org.</dd>
+</dl>
+<p class="annotatable">Roles, sessions, and API keys are owned by <a href="#auth">Authentication &amp; Authorization</a>.</p>
+
+<h4>Billing</h4>
+<p class="annotatable">The <a class="ident" data-type="class" data-repo="platform">BillingService</a> owns plans, invoices, and payment. Invoice status is <code>draft | open | paid | void</code> and plan name is <code>free | team | enterprise</code>.</p>
+<dl>
+  <dt><a class="ident" data-type="method" data-repo="platform">invoicesForOrg</a></dt>
+  <dd>Lists the invoices for an org.</dd>
+  <dt><a class="ident" data-type="method" data-repo="platform">finalizeInvoice</a></dt>
+  <dd>Charges base plan price plus overage, moves the invoice <code>draft</code>&rarr;<code>open</code>, and enqueues an <code>invoice_receipt</code>. It reads the usage total via <code>GET /usage/total?period=current</code> through the gateway &mdash; never the usage schema directly.</dd>
+  <dt><a class="ident" data-type="method" data-repo="platform">chargeInvoice</a></dt>
+  <dd>Moves <code>open</code>&rarr;<code>paid</code> on success; failed charges retry for 7 days.</dd>
+</dl>
+<p class="annotatable">Plans, overage math, and the invoice state machine are owned by <a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a>.</p>
+
+<h4>Usage</h4>
+<p class="annotatable">The <a class="ident" data-type="class" data-repo="platform">UsageService</a> meters one row per metered action. The <code>usage_events</code> table is append-only &mdash; rows are never updated or deleted.</p>
+<dl>
+  <dt><a class="ident" data-type="method" data-repo="platform">record</a></dt>
+  <dd>Append-only <code>INSERT</code> of <code>units</code> for an org.</dd>
+  <dt><a class="ident" data-type="method" data-repo="platform">totalForPeriod</a></dt>
+  <dd>Sums units in a time window; this is what billing reads through the gateway when finalizing an invoice.</dd>
+</dl>
+
+<h4>Notifications</h4>
+<p class="annotatable">The <a class="ident" data-type="class" data-repo="platform">NotificationsService</a> sends transactional email and webhooks. Channels are <code>email | webhook</code> and templates are <code>invoice_receipt | member_invite | usage_alert | payment_failed</code>.</p>
+<dl>
+  <dt><a class="ident" data-type="method" data-repo="platform">enqueue</a></dt>
+  <dd>Inserts a row with status <code>pending</code>; the channel defaults to <code>email</code>.</dd>
+  <dt><a class="ident" data-type="method" data-repo="platform">deliverPending</a></dt>
+  <dd>A background worker tick that claims pending rows with <code>FOR UPDATE SKIP LOCKED</code>, marks each <code>sent</code> or <code>failed</code>, and retries failures with backoff.</dd>
+</dl>
+<p class="annotatable">Channels, templates, and the delivery worker are owned by <a href="#notifications-and-webhooks">Notifications &amp; Webhooks</a>.</p>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Heads up: ADR numbering</span>The platform doc <code>platform/docs/architecture.md</code> swaps the ADR numbers for the gateway and schema-per-service decisions. The wiki (article 1001) is canonical; follow its numbering, which is summarized in <a href="#architecture">Architecture at a Glance</a>.</div>
+</div>

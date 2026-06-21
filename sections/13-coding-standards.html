@@ -1,0 +1,126 @@
+<p class="lead annotatable">A handful of conventions keep two repos and five services consistent. Store money as integer cents and ids as UUIDs; scope every backend query to the caller's org and never trust an <code>orgId</code> from the request body; reach the backend only through <code>api-client</code> and build UI only from <code>ui</code>; keep pull requests small and let the linter own style.</p>
+
+<ul>
+  <li><strong>Data.</strong> UUID ids, money in integer cents, timestamps as <code>timestamptz</code> in UTC, inputs validated with zod.</li>
+  <li><strong>Backend.</strong> Org-scope every query, ignore any body <code>orgId</code>, never read another service's schema.</li>
+  <li><strong>Frontend.</strong> All backend calls go through <code>api-client</code>; all primitives come from <code>ui</code>.</li>
+  <li><strong>Process.</strong> One idea per pull request; review for correctness and tests; let eslint handle style.</li>
+</ul>
+
+<p class="annotatable">This section is a checklist with cross-links. The deep detail lives in the owning sections &mdash; schema in <a href="#data-model">Core Domain &amp; Data Model</a>, services in <a href="#backend-development">Backend Development</a>, the UI rules in <a href="#frontend-development">Frontend Development</a>, and merge process in <a href="#code-review">Code Review &amp; Pull Requests</a>.</p>
+
+<h3>Data conventions</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web</a>
+</div>
+
+<p class="annotatable">Four rules hold across every migration in <a class="gh-repo" data-repo="platform"></a> and are mirrored exactly by the TypeScript types and badge labels in <a class="gh-repo" data-repo="web"></a>. The column-level schema is owned by <a href="#data-model">Core Domain &amp; Data Model</a>.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Convention</th><th>How</th><th>Enforced by</th></tr></thead>
+  <tbody>
+    <tr><td>Ids are UUIDs</td><td>Server-side default <code>gen_random_uuid()</code> on the primary key</td><td>Migration default</td></tr>
+    <tr><td>Money is integer cents, never floats</td><td>Columns suffixed <code>_cents</code> (e.g. <code>amount_cents</code>); TS fields are <code>number</code> (e.g. <code>amountCents</code>)</td><td>Column type + types</td></tr>
+    <tr><td>Timestamps are UTC</td><td><code>timestamptz NOT NULL DEFAULT now()</code> for <code>created_at</code> / <code>occurred_at</code></td><td>Column type</td></tr>
+    <tr><td>Enums live in the database</td><td><code>CHECK</code> constraints; TS literals and UI labels match the backend</td><td>CHECK + types</td></tr>
+  </tbody>
+</table></div>
+
+<p class="annotatable">Cents stay integers end to end. The frontend converts only at render time in the <a class="ident" data-type="function" data-repo="web">Money</a> badge with <code>(cents / 100).toFixed(2)</code> &mdash; nothing upstream ever holds a fractional dollar amount.</p>
+
+<p class="annotatable">The database is the source of truth for enums, and the <a class="ident" data-type="function" data-repo="web">StatusBadge</a> and <a class="ident" data-type="function" data-repo="web">RoleBadge</a> labels are written to match those literals exactly. The constraints in force:</p>
+
+<dl>
+  <dt>Role</dt>
+  <dd><code>owner|admin|member</code></dd>
+  <dt>Invoice status</dt>
+  <dd><code>draft|open|paid|void</code></dd>
+  <dt>Plan name</dt>
+  <dd><code>free|team|enterprise</code></dd>
+  <dt>Notification channel and status</dt>
+  <dd><code>email|webhook</code> and <code>pending|sent|failed</code></dd>
+  <dt>Usage units</dt>
+  <dd><code>units &gt;= 0</code></dd>
+</dl>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Not every text column is an enum</span>The notification <code>template</code> column is free text in the migration &mdash; there is no <code>CHECK</code> on it. The familiar template names (<code>invoice_receipt</code>, <code>member_invite</code>, <code>usage_alert</code>, <code>payment_failed</code>) are a project convention, not a database-enforced enum. See <a href="#notifications-and-webhooks">Notifications &amp; Webhooks</a>.</div>
+</div>
+
+<p class="annotatable">For input validation the stack uses zod, declared as a dependency of <a class="gh-repo" data-repo="platform"></a>. Validate untrusted input at the service boundary rather than trusting shapes deeper in the code.</p>
+
+<h3>Backend conventions</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="wiki">Security &amp; secrets (wiki article 1009)</a>
+</div>
+
+<p class="annotatable">Services are classes; their methods are async and typed. Three rules matter most, and the first one is a security rule, not just a style one &mdash; a missing org scope is a bug. See <a href="#backend-development">Backend Development</a> and <a href="#security">Security &amp; Secrets</a>.</p>
+
+<dl>
+  <dt>Org-scope every query</dt>
+  <dd>Every method takes an <code>orgId</code> and scopes its SQL to it &mdash; e.g. <a class="ident" data-type="method" data-repo="platform">listMembers</a> runs <code>SELECT * FROM users WHERE org_id = $1</code> and <a class="ident" data-type="method" data-repo="platform">invoicesForOrg</a> filters on <code>WHERE org_id = $1</code>.</dd>
+  <dt>Never trust a body <code>orgId</code></dt>
+  <dd>The verified org comes from the session via the gateway, which injects <code>x-org-id</code> and <code>x-user-id</code>. Downstream services must ignore any <code>orgId</code> in the request body. See <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>.</dd>
+  <dt>No cross-service DB reads</dt>
+  <dd>A service never queries another service's schema. Cross-service data goes back out through the gateway over HTTP &mdash; billing reads usage totals from the usage service that way, never from the usage schema directly.</dd>
+</dl>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">A missing org scope is a security bug</span>Treat an unscoped query the same as a vulnerability, not a code-style nit. The gateway is the only thing that establishes identity; once a request is inside a service, the only trustworthy org is the one in <code>x-org-id</code>.</div>
+</div>
+
+<h3>Frontend conventions</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web</a>
+</div>
+
+<p class="annotatable">The frontend has no database access and no knowledge of internal services &mdash; the gateway is the only backend. Two rules keep apps thin; both are owned in depth by <a href="#frontend-development">Frontend Development</a>.</p>
+
+<dl>
+  <dt>All backend access through <code>api-client</code></dt>
+  <dd>Apps never call <code>fetch</code> directly. <code>packages/api-client</code> is the only place that knows endpoint URLs and shapes. If an endpoint isn't in the client, add it there first.</dd>
+  <dt>All primitives from <code>ui</code></dt>
+  <dd>Apps never hand-roll buttons, tables, inputs, badges, or design tokens &mdash; they come from <code>packages/ui</code>'s public index. An app that needs a new primitive contributes it upstream rather than forking one locally.</dd>
+</dl>
+
+<p class="annotatable">The shared pieces have names worth knowing: <a class="ident" data-type="module" data-repo="web">api-client</a> exports the typed <a class="ident" data-type="constant" data-repo="web">api</a> wrapper and throws <a class="ident" data-type="class" data-repo="web">SessionExpiredError</a> on a 401, while <a class="ident" data-type="module" data-repo="web">ui</a> exports <a class="ident" data-type="function" data-repo="web">Button</a>, <a class="ident" data-type="function" data-repo="web">Table</a>, and the badges.</p>
+
+<p class="annotatable">Auth follows one pattern: the session cookie is sent with <code>credentials: "include"</code>, and a 401 surfaces as <a class="ident" data-type="class" data-repo="web">SessionExpiredError</a>. The gateway base URL resolves from <code>NEXT_PUBLIC_API_URL</code> (default <code>http://localhost:3000</code>). Session details are owned by <a href="#auth">Authentication &amp; Authorization</a>.</p>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Convention layering</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart LR
+  A[App<br/>dashboard / admin] -->|no direct fetch| B[api-client]
+  B --> C[Gateway]
+  C -->|x-org-id| D[Service<br/>org-scoped query]
+  D -->|own schema only| E[(Postgres)]
+  A -. use ui, no fork .-> A</pre></div>
+</div>
+
+<h3>Process and style ownership</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Code review (wiki article 1005)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web</a>
+</div>
+
+<p class="annotatable">Two process rules keep changes reviewable. Keep pull requests small &mdash; one idea per PR, and split big changes. Review for correctness, clarity, tests, and fit, and let the linter handle style instead of spending review comments on it. The full review and merge bar is owned by <a href="#code-review">Code Review &amp; Pull Requests</a>, and tests-come-with-the-change is covered in <a href="#testing">Testing</a>.</p>
+
+<p class="annotatable">Style is enforced by tooling, not opinion. Linting is eslint, run as a script in both repos; typing is TypeScript, with a build-mode typecheck on the backend.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Repo</th><th>Lint</th><th>Typecheck</th></tr></thead>
+  <tbody>
+    <tr><td><a class="gh-repo" data-repo="platform"></a></td><td><code>eslint services</code> (also via <code>make lint</code>)</td><td><code>tsc --build</code></td></tr>
+    <tr><td><a class="gh-repo" data-repo="web"></a></td><td><code>eslint apps packages</code></td><td>TypeScript ^5.4</td></tr>
+  </tbody>
+</table></div>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">The only style tooling is eslint</span>There is no separate formatter in either repo &mdash; eslint and the TypeScript compiler are the whole story. Defaults like UUID ids, <code>timestamptz</code> timestamps, and <code>_cents</code> columns are also enforced where they belong, in migrations; see <a href="#database-migrations">Database Migrations</a>.</div>
+</div>

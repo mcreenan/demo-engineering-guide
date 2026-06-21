@@ -1,0 +1,151 @@
+<p class="lead annotatable">Every request enters through one door: the gateway. It is the only publicly-exposed service and the only authenticated edge — it verifies the session, attaches the caller's identity as headers, and forwards the request to an internal service that does the real work and returns JSON.</p>
+
+<ul>
+  <li><strong>One entrypoint.</strong> The browser calls <code>https://api.demo.co/&lt;service&gt;/...</code>; internal services are never reachable directly.</li>
+  <li><strong>Auth at the edge.</strong> The gateway runs <a class="ident" data-type="function" data-repo="platform">verifySession</a> and rejects anything without a valid, unexpired session with a <code>401</code>.</li>
+  <li><strong>Identity by header.</strong> The gateway forwards to <code>http://&lt;name&gt;.internal</code>, adding <code>x-user-id</code> and <code>x-org-id</code> from the verified session.</li>
+  <li><strong>Trust the headers.</strong> Internal services scope every query to <code>x-org-id</code> and must never accept an <code>orgId</code> from the request body.</li>
+  <li><strong>Cross-service reads loop back.</strong> Services never call each other directly — a read goes back out through the gateway.</li>
+</ul>
+
+<h3 id="request-lifecycle">The request lifecycle, end to end</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="wiki">Architecture Decision Records (wiki article 1001)</a>
+</div>
+
+<p class="annotatable">A single request travels through four steps. The gateway owns steps 1–3; the internal service owns step 4 and hands its result back through the gateway.</p>
+
+<ol>
+  <li><strong>Browser sends the cookie.</strong> The <a class="gh-repo" data-repo="web"></a> frontend calls <code>https://api.demo.co/&lt;service&gt;/...</code> carrying the session cookie <code>demo_session</code>. The api-client sends it with <code>credentials: "include"</code> — see <a href="#frontend-development">Frontend Development</a>.</li>
+  <li><strong>Gateway verifies the session.</strong> <a class="ident" data-type="function" data-repo="platform">verifySession</a> reads the opaque <code>demo_session</code> cookie and resolves it to identity. A missing token returns <code>401 {"error":"no session"}</code>; an expired or unresolved session returns <code>401 {"error":"session expired"}</code>. On success it stashes the resolved session (<code>userId</code>, <code>orgId</code>, <code>expiresAt</code>) on the request and continues.</li>
+  <li><strong>Gateway proxies inward.</strong> The <a class="ident" data-type="function" data-repo="platform">proxy</a> factory forwards the request to <code>http://&lt;name&gt;.internal</code>, preserving the method and adding identity headers <code>x-user-id</code> and <code>x-org-id</code>.</li>
+  <li><strong>Service responds.</strong> The internal service does its work scoped to that org, returns JSON, and the gateway relays the upstream status and body straight back to the caller.</li>
+</ol>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Request flow</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">sequenceDiagram
+  participant B as Browser
+  participant I as ALB Ingress<br/>api.demo.co (TLS)
+  participant G as Gateway :3000
+  participant R as Redis<br/>(session store)
+  participant S as accounts.internal :8080
+  participant P as Postgres<br/>(accounts schema)
+  B->>I: GET /accounts/...<br/>Cookie: demo_session
+  I->>G: forward
+  G->>R: lookupSession(token)
+  alt no / expired session
+    G-->>B: 401 no session<br/>or session expired
+  else valid
+    G->>S: forward http://accounts.internal/...<br/>+ x-user-id + x-org-id
+    S->>P: query scoped to x-org-id<br/>(own schema only)
+    P-->>S: rows
+    S-->>G: JSON
+    G-->>B: relay upstream status + body
+  end
+  Note over G: GET /healthz bypasses verifySession</pre></div>
+</div>
+
+<h3 id="verify-session">Step 2 — verifySession</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+</div>
+
+<p class="annotatable">The gateway is the only place auth happens. <a class="ident" data-type="function" data-repo="platform">verifySession</a> turns an opaque cookie into a verified identity, or rejects the request outright. Session mechanics, API keys, and SSO are owned by <a href="#auth">Authentication &amp; Authorization</a>.</p>
+
+<dl>
+  <dt>Reads</dt>
+  <dd>The opaque cookie <code>demo_session</code> from the request.</dd>
+  <dt>Missing token</dt>
+  <dd>Returns <code>401 {"error":"no session"}</code>.</dd>
+  <dt>Unresolved or expired</dt>
+  <dd>When no session resolves, or <code>expiresAt</code> is in the past, returns <code>401 {"error":"session expired"}</code>.</dd>
+  <dt>On success</dt>
+  <dd>Stashes the resolved session — a <code>userId</code>, <code>orgId</code>, and <code>expiresAt</code> — on the request and proceeds.</dd>
+  <dt>Lookup</dt>
+  <dd><a class="ident" data-type="function" data-repo="platform">lookupSession</a> resolves a token to identity; it is backed by Redis in production. The sample implementation returns null.</dd>
+</dl>
+
+<h3 id="proxy">Step 3 — proxy</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="wiki">Security &amp; secrets (wiki article 1009)</a>
+</div>
+
+<p class="annotatable">Once the session is verified, <a class="ident" data-type="function" data-repo="platform">proxy</a> relays the request inward. Each public prefix is mounted with <code>proxy(&lt;name&gt;)</code>, and the request is forwarded to that service's internal address.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Public prefix</th><th>Internal target</th></tr></thead>
+  <tbody>
+    <tr><td><code>/accounts</code></td><td><code>http://accounts.internal</code></td></tr>
+    <tr><td><code>/billing</code></td><td><code>http://billing.internal</code></td></tr>
+    <tr><td><code>/usage</code></td><td><code>http://usage.internal</code></td></tr>
+    <tr><td><code>/notifications</code></td><td><code>http://notifications.internal</code></td></tr>
+  </tbody>
+</table></div>
+
+<p class="annotatable">The proxy preserves the HTTP method, sets the headers below, and then relays the upstream status and response text back to the original caller. The body is omitted for a <code>GET</code> and otherwise sent as the JSON-serialized request body.</p>
+
+<dl>
+  <dt><code>content-type</code></dt>
+  <dd><code>application/json</code></dd>
+  <dt><code>x-user-id</code></dt>
+  <dd>The verified <code>userId</code> from the session.</dd>
+  <dt><code>x-org-id</code></dt>
+  <dd>The verified <code>orgId</code> from the session.</dd>
+</dl>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Ports</span>The gateway listens on port 3000. Internal services resolve at <code>http://&lt;name&gt;.internal</code> inside the cluster and listen on container port 8080. See <a href="#service-catalog">Platform Services</a> for the per-service table.</div>
+</div>
+
+<h3 id="trust-boundary">The trust boundary</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="wiki">Security &amp; secrets (wiki article 1009)</a>
+</div>
+
+<p class="annotatable">Because the gateway is the only authenticated edge, internal services trust the identity headers it sets. That trust comes with one hard rule, which <a href="#security">Security &amp; Secrets</a> owns as policy.</p>
+
+<div class="panel danger">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M6.7 2.75h6.6l4.95 4.95v6.6l-4.95 4.95H6.7L1.75 14.3V7.7L6.7 2.75Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 6.5v4.2M10 13.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Never accept orgId from the body</span>Downstream services scope every query to the <code>x-org-id</code> header and must ignore any <code>orgId</code> in the request body. A missing org scope is a security bug.</div>
+</div>
+
+<h3 id="healthz">The /healthz probe</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra</a>
+</div>
+
+<p class="annotatable">One route is intentionally unauthenticated. <code>GET /healthz</code> returns <code>{ ok: true }</code> and is registered before the <a class="ident" data-type="function" data-repo="platform">verifySession</a> middleware, so it never requires a session — everything mounted after that line does.</p>
+
+<p class="annotatable">In Kubernetes the gateway Deployment uses <code>/healthz</code> on port 3000 as its readiness probe (with <code>initialDelaySeconds: 5</code>), which gates traffic during a rollout. The ALB Ingress detail is owned by <a href="#infrastructure">Infrastructure &amp; Environments</a>.</p>
+
+<div class="panel tip">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 10.5 8.5 14 15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Why it must stay open</span>The probe is the liveness/readiness check for Kubernetes — if it required auth, the cluster could not tell whether a pod was healthy.</div>
+</div>
+
+<h3 id="cross-service">Cross-service reads loop back through the gateway</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+</div>
+
+<p class="annotatable">Internal services never call each other directly and never read another service's schema. When one service needs data from another, it comes back out through the gateway over HTTP — the same authenticated path a browser uses.</p>
+
+<p class="annotatable">For example, <a class="ident" data-type="class" data-repo="platform">BillingService</a> reads usage counters by calling <code>GET /usage/total?period=current</code> through the gateway, never the <code>usage</code> schema directly. The overage and metering mechanics live in <a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a>.</p>
+
+<h3 id="adr-alignment">Why one gateway</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Architecture Decision Records (wiki article 1001)</a>
+</div>
+
+<p class="annotatable">The single-entrypoint design is recorded as ADR-001, "API gateway as the single entrypoint": all external traffic flows through one gateway, internal services are not publicly reachable, and there is one place for auth, rate limiting, and audit logging. The schema-per-service decision is ADR-002. The at-a-glance topology lives in <a href="#architecture">Architecture at a Glance</a>.</p>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">ADR numbering</span>The wiki (article 1001) is canonical for ADRs and numbers the gateway decision ADR-001. The platform doc <code>architecture.md</code> swaps the numbers; follow the wiki. Rate limiting and audit logging are listed as gateway responsibilities in the ADR, but are not implemented in the current gateway code — treat them as intent, not behavior.</div>
+</div>

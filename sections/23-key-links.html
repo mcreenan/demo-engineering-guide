@@ -1,0 +1,124 @@
+<p class="lead annotatable">This is the directory: the three repos, the Engineering Wiki, the Help Center, the key URLs, and the Slack channels &mdash; with a cross-link to the section that owns each topic. When two things disagree, source-of-truth precedence is code first, then the wiki, then the Help Center.</p>
+
+<ul>
+  <li><strong>Repositories.</strong> <a class="gh-repo" data-repo="platform"></a>, <a class="gh-repo" data-repo="web"></a>, <a class="gh-repo" data-repo="infra"></a> &mdash; all under <code>https://github.com/demo-co</code>.</li>
+  <li><strong>Engineering Wiki.</strong> Articles 1001&ndash;1009: ADRs, runbooks, and process. Canonical for how we work.</li>
+  <li><strong>Help Center.</strong> Eight customer-facing articles at <code>https://help.demo.co</code>.</li>
+  <li><strong>Key URLs &amp; channels.</strong> API <code>https://api.demo.co</code>; Help <code>https://help.demo.co</code>; Slack <code>#engineering</code>, <code>#incidents</code>, <code>#security</code>.</li>
+</ul>
+
+<h3>Repositories</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+  <a data-kind="repo" href="https://github.com/demo-co/web">web</a>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra</a>
+</div>
+
+<p class="annotatable">Three repositories in the GitHub org <code>demo-co</code>. Repo links resolve to the repo root; deep references live in the sections that own them.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Repo</th><th>What it is</th><th>Authoritative for</th><th>Owner section</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><a class="gh-repo" data-repo="platform"></a></td>
+      <td>Backend API monorepo &mdash; Node + TypeScript, one shared Postgres, deployed to Kubernetes on EKS.</td>
+      <td>How the system behaves.</td>
+      <td><a href="#service-catalog">Platform Services</a></td>
+    </tr>
+    <tr>
+      <td><a class="gh-repo" data-repo="web"></a></td>
+      <td>Frontend monorepo &mdash; pnpm / Next.js apps + shared packages; talks to the backend only through the gateway at <code>https://api.demo.co</code>.</td>
+      <td>What the product looks like.</td>
+      <td><a href="#frontend-development">Frontend Development</a></td>
+    </tr>
+    <tr>
+      <td><a class="gh-repo" data-repo="infra"></a></td>
+      <td>Terraform + Kubernetes + CI/CD.</td>
+      <td>How the system is run.</td>
+      <td><a href="#infrastructure">Infrastructure &amp; Environments</a></td>
+    </tr>
+  </tbody>
+</table></div>
+
+<h3>Engineering Wiki</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Architecture Decision Records (wiki article 1001)</a>
+  <a data-kind="wiki">On-call runbook (wiki article 1002)</a>
+  <a data-kind="wiki">Release &amp; deployment (wiki article 1003)</a>
+  <a data-kind="wiki">Engineering onboarding (wiki article 1004)</a>
+  <a data-kind="wiki">Code review (wiki article 1005)</a>
+  <a data-kind="wiki">Incident management (wiki article 1006)</a>
+  <a data-kind="wiki">Database migrations (wiki article 1007)</a>
+  <a data-kind="wiki">Service catalog (wiki article 1008)</a>
+  <a data-kind="wiki">Security &amp; secrets (wiki article 1009)</a>
+</div>
+
+<p class="annotatable">The wiki is canonical for ADRs, runbooks, and process. Cite an article by its title and id; each maps to the section that summarizes it here.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Id</th><th>Title</th><th>Owner section</th></tr></thead>
+  <tbody>
+    <tr><td>1001</td><td>Architecture Decision Records</td><td><a href="#architecture">Architecture at a Glance</a></td></tr>
+    <tr><td>1002</td><td>On-call runbook</td><td><a href="#observability-and-on-call">Observability &amp; On-Call</a></td></tr>
+    <tr><td>1003</td><td>Release &amp; deployment</td><td><a href="#release-and-deployment">Release &amp; Deployment</a></td></tr>
+    <tr><td>1004</td><td>Engineering onboarding</td><td><a href="#onboarding">Engineering Onboarding</a></td></tr>
+    <tr><td>1005</td><td>Code review</td><td><a href="#code-review">Code Review &amp; Pull Requests</a></td></tr>
+    <tr><td>1006</td><td>Incident management</td><td><a href="#incident-response">Incident Response &amp; Postmortems</a></td></tr>
+    <tr><td>1007</td><td>Database migrations</td><td><a href="#database-migrations">Database Migrations</a></td></tr>
+    <tr><td>1008</td><td>Service catalog</td><td><a href="#service-catalog">Platform Services</a></td></tr>
+    <tr><td>1009</td><td>Security &amp; secrets</td><td><a href="#security">Security &amp; Secrets</a></td></tr>
+  </tbody>
+</table></div>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">ADR-003 is referenced but not present</span>Onboarding (wiki 1004) refers to an ADR-003 for trunk-based development, but its ADR text is not in the available sources. Treat trunk-based development as the practice; do not cite an ADR-003 link &mdash; it is unknown here.</div>
+</div>
+
+<h3>Help Center</h3>
+<div class="sources-data" hidden>
+  <a data-kind="help" href="https://help.demo.co/getting-started">Getting started</a>
+  <a data-kind="help" href="https://help.demo.co/members-and-roles">Members &amp; roles</a>
+  <a data-kind="help" href="https://help.demo.co/billing">Billing &amp; plans</a>
+  <a data-kind="help" href="https://help.demo.co/usage-and-limits">Usage &amp; limits</a>
+  <a data-kind="help" href="https://help.demo.co/api-keys">API keys</a>
+  <a data-kind="help" href="https://help.demo.co/sso-saml">Single sign-on (SAML)</a>
+  <a data-kind="help" href="https://help.demo.co/notifications">Email &amp; webhook notifications</a>
+  <a data-kind="help" href="https://help.demo.co/troubleshooting-login">Troubleshooting login</a>
+</div>
+
+<p class="annotatable">The Help Center is authoritative for product-facing behavior. Eight articles, each at <code>https://help.demo.co/&lt;slug&gt;</code>.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Article</th><th>URL</th><th>Owner section</th></tr></thead>
+  <tbody>
+    <tr><td>Getting started</td><td><a href="https://help.demo.co/getting-started"><code>help.demo.co/getting-started</code></a></td><td><a href="#onboarding">Engineering Onboarding</a></td></tr>
+    <tr><td>Members &amp; roles</td><td><a href="https://help.demo.co/members-and-roles"><code>help.demo.co/members-and-roles</code></a></td><td><a href="#data-model">Core Domain &amp; Data Model</a></td></tr>
+    <tr><td>Billing &amp; plans</td><td><a href="https://help.demo.co/billing"><code>help.demo.co/billing</code></a></td><td><a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a></td></tr>
+    <tr><td>Usage &amp; limits</td><td><a href="https://help.demo.co/usage-and-limits"><code>help.demo.co/usage-and-limits</code></a></td><td><a href="#billing-and-metering">Billing, Plans &amp; Usage Metering</a></td></tr>
+    <tr><td>API keys</td><td><a href="https://help.demo.co/api-keys"><code>help.demo.co/api-keys</code></a></td><td><a href="#auth">Authentication &amp; Authorization</a></td></tr>
+    <tr><td>Single sign-on (SAML)</td><td><a href="https://help.demo.co/sso-saml"><code>help.demo.co/sso-saml</code></a></td><td><a href="#auth">Authentication &amp; Authorization</a></td></tr>
+    <tr><td>Email &amp; webhook notifications</td><td><a href="https://help.demo.co/notifications"><code>help.demo.co/notifications</code></a></td><td><a href="#notifications-and-webhooks">Notifications &amp; Webhooks</a></td></tr>
+    <tr><td>Troubleshooting login</td><td><a href="https://help.demo.co/troubleshooting-login"><code>help.demo.co/troubleshooting-login</code></a></td><td><a href="#auth">Authentication &amp; Authorization</a></td></tr>
+  </tbody>
+</table></div>
+
+<h3>Key URLs &amp; communication</h3>
+
+<p class="annotatable">The endpoints and channels you will reach for most often.</p>
+
+<dl>
+  <dt>API base</dt>
+  <dd><code>https://api.demo.co</code> &mdash; the gateway, the single public entrypoint. See <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>.</dd>
+  <dt>Help Center</dt>
+  <dd><code>https://help.demo.co</code> &mdash; customer-facing docs.</dd>
+  <dt>GitHub org</dt>
+  <dd><code>https://github.com/demo-co</code> &mdash; home of <a class="gh-repo" data-repo="platform"></a>, <a class="gh-repo" data-repo="web"></a>, and <a class="gh-repo" data-repo="infra"></a>.</dd>
+  <dt>Slack</dt>
+  <dd><code>#engineering</code> for day-to-day; <code>#incidents</code> to declare and run incidents (<a href="#incident-response">Incident Response &amp; Postmortems</a>); <code>#security</code> to report security issues (<a href="#security">Security &amp; Secrets</a>).</dd>
+</dl>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">New here? Start with these</span>Read <a href="#about">About This Guide</a> for how this guide is built and sourced, skim the <a href="#glossary">Glossary</a> for the vocabulary, then follow <a href="#onboarding">Engineering Onboarding</a>.</div>
+</div>

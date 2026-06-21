@@ -1,0 +1,118 @@
+<p class="lead annotatable">An incident is anything customer-affecting in production. This section owns the process once a page is acknowledged: classify the severity, assign roles, <strong>mitigate first</strong> (often a rollback), communicate on a cadence, resolve, and run a blameless postmortem for every Sev 1 or Sev 2.</p>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">In short</span>Acknowledge the page, declare in <code>#incidents</code> with a one-line summary and severity, look at the gateway, and check the most recent change &mdash; most incidents follow a deploy, so roll it back before deeper debugging. One person wears all the hats for a small incident; split Incident Commander, Responders, and Comms for a Sev 1. Every Sev 1/2 gets a blameless postmortem within two business days, with action items tracked to done.</div>
+</div>
+
+<p class="annotatable">The paging trigger and first triage steps belong to <a href="#observability-and-on-call">Observability &amp; On-Call</a>; this section starts where a page is acknowledged. The first-five-minutes flow comes from the runbook in <a class="gh-repo" data-repo="infra"></a> (<code>runbooks/incident-response.md</code>).</p>
+
+<h3>Severity</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Incident management (wiki article 1006)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">runbooks/incident-response.md</a>
+</div>
+<p class="annotatable">Severity decides how loud the response is. Set it when you declare; raise it later if the picture worsens.</p>
+<div class="table-wrapper"><table>
+  <thead><tr><th>Severity</th><th>Meaning</th><th>Response</th></tr></thead>
+  <tbody>
+    <tr><td>Sev 1</td><td>Full outage or data-loss risk</td><td>Page immediately, all hands</td></tr>
+    <tr><td>Sev 2</td><td>Major feature down, no workaround</td><td>Page on-call, open incident</td></tr>
+    <tr><td>Sev 3</td><td>Degraded or partial, workaround exists</td><td>Handle in business hours</td></tr>
+  </tbody>
+</table></div>
+
+<h3>Roles</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Incident management (wiki article 1006)</a>
+</div>
+<p class="annotatable">An incident has three roles. One person can wear all of them for a small incident; split them for a Sev 1 so coordination, hands-on work, and communication don&rsquo;t compete for the same attention.</p>
+<dl>
+  <dt>Incident Commander</dt>
+  <dd>Runs the incident, makes the calls, and keeps the timeline.</dd>
+  <dt>Responders</dt>
+  <dd>Do the hands-on work the Incident Commander coordinates.</dd>
+  <dt>Comms</dt>
+  <dd>Update <code>#incidents</code> and, for Sev 1/2, the status page.</dd>
+</dl>
+
+<h3>The first five minutes</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">runbooks/incident-response.md</a>
+  <a data-kind="wiki">Incident management (wiki article 1006)</a>
+</div>
+<p class="annotatable">When a page fires, work the runbook in order before reaching for anything clever:</p>
+<ol>
+  <li><strong>Acknowledge the page.</strong> Stop it escalating so the response can focus.</li>
+  <li><strong>Declare in <code>#incidents</code>.</strong> Post a one-line summary and the severity.</li>
+  <li><strong>Look at the gateway first.</strong> It is the single ingress, so most symptoms show there &mdash; see <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>.</li>
+  <li><strong>Check the recent change.</strong> Most incidents follow a deploy; if one is in flight or just finished, roll it back before deeper debugging.</li>
+</ol>
+<p class="annotatable">The gateway commands are the same first look used in on-call triage:</p>
+<div class="codeblock"><pre><code><span class="cb-comment"># the gateway is the single place to look first</span>
+kubectl get pods -l tier=edge
+kubectl logs -l app=gateway --tail=100</code></pre></div>
+
+<h3>The flow</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Incident management (wiki article 1006)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">runbooks/incident-response.md</a>
+</div>
+<p class="annotatable">The shape of every incident is the same: <strong>declare, mitigate first, communicate on a cadence, resolve, postmortem</strong>. Mitigation comes before root cause &mdash; stop the customer impact first, understand it after. Because most incidents follow a deploy, the first mitigation to reach for is a rollback.</p>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Incident lifecycle</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart TD
+  A["Page fires<br/>customer-affecting"] --> B["Acknowledge"]
+  B --> C["Declare in #incidents<br/>one line + severity"]
+  C --> D["Look at the gateway"]
+  D --> E["Check recent change"]
+  E --> F{"Recent deploy?"}
+  F -->|yes| G["Rollback<br/>kubectl rollout undo"]
+  F -->|no| H["Deeper debug"]
+  G --> I["Mitigate"]
+  H --> I
+  I --> J["Communicate on a cadence"]
+  J --> K["Resolve"]
+  K --> L["Blameless postmortem<br/>within 2 business days"]
+  L --> M["Action items tracked to done"]</pre></div>
+</div>
+
+<p class="annotatable">The runbook gives no specific cadence interval &mdash; communicate &ldquo;on a cadence,&rdquo; keeping <code>#incidents</code> and, for Sev 1/2, the status page current. Comms owns those updates.</p>
+
+<h3>Mitigation: roll the deploy back</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">runbooks/incident-response.md</a>
+  <a data-kind="wiki">Release &amp; deployment (wiki article 1003)</a>
+</div>
+<p class="annotatable">A bad deploy is the most common cause, and a rollback resolves most Sev 1/2s. The mechanics live in <a href="#release-and-deployment">Release &amp; Deployment</a> &mdash; in short, a rollback is a one-click redeploy of the previous image tag:</p>
+<div class="codeblock"><pre><code>kubectl rollout undo deploy/gateway</code></pre></div>
+
+<div class="panel danger">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M6.7 2.75h6.6l4.95 4.95v6.6l-4.95 4.95H6.7L1.75 14.3V7.7L6.7 2.75Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 6.5v4.2M10 13.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Never hand-edit production</span>Do not patch a live deployment with <code>kubectl edit</code> &mdash; all production change goes through git. Roll back to the previous image instead. For the <code>kubectl</code> and EKS context, see <a href="#infrastructure">Infrastructure &amp; Environments</a>.</div>
+</div>
+
+<h3>Postmortems</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Incident management (wiki article 1006)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">runbooks/incident-response.md</a>
+</div>
+<p class="annotatable">Every Sev 1 and Sev 2 gets a <strong>blameless</strong> postmortem within two business days, focused on the systemic fix rather than who did what. Action items are tracked in the wiki and followed to done &mdash; a postmortem with open action items isn&rsquo;t finished.</p>
+
+<div class="panel tip">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 10.5 8.5 14 15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Use the wiki template</span>The runbook points to the &ldquo;Incident management&rdquo; wiki page (article 1006) for the postmortem template and process &mdash; start from it rather than a blank doc.</div>
+</div>
+
+<h3>Security incidents</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Security &amp; secrets (wiki article 1009)</a>
+  <a data-kind="wiki">Incident management (wiki article 1006)</a>
+</div>
+<p class="annotatable">A Sev 1 security issue follows this same incident process. For reporting, the rule lives in <a href="#security">Security &amp; Secrets</a>: revoke first if you can, then report in <code>#security</code>.</p>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Where to post</span>Declare and give cadence updates in <code>#incidents</code>. Report security issues in <code>#security</code>. Common causes and the paging trigger (gateway 5xx over 2% for 5 minutes, escalate to the service owner after 15 minutes) live in <a href="#observability-and-on-call">Observability &amp; On-Call</a>.</div>
+</div>

@@ -1,0 +1,137 @@
+<p class="lead annotatable">Demo Co ships from <code>main</code> continuously. Every merge to <code>main</code> runs CI, builds container images, and deploys to staging automatically; production is a tagged release — push a git tag matching <code>v*</code> and the same pipeline deploys to production.</p>
+
+<p class="annotatable">This section owns the deploy pipeline and rollback. The short version is below; the rest of the section is the detail.</p>
+
+<ul>
+  <li><strong>Merge to staging is automatic.</strong> A push to <code>main</code> triggers the pipeline and lands on staging with no manual step.</li>
+  <li><strong>Production is a tag.</strong> Cutting a <code>v*</code> git tag is the promotion; there is no separate "deploy to prod" button.</li>
+  <li><strong>Soak first.</strong> Let a change sit on staging for roughly 30 minutes before tagging — this is a human judgement, not an enforced gate.</li>
+  <li><strong>Three jobs, chained.</strong> <code>test</code> &rarr; <code>build-and-push</code> &rarr; <code>deploy</code>. A red build never deploys.</li>
+  <li><strong>Rolling deploys.</strong> Kubernetes replaces pods one at a time; the gateway readiness probe gates traffic, so a bad image fails the rollout instead of taking the site down.</li>
+  <li><strong>Fastest undo.</strong> <code>kubectl rollout undo deploy/gateway</code>, or re-tag the last good commit. Never hand-edit production.</li>
+</ul>
+
+<h3 id="release-flow">From merge to production</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Release &amp; deployment (wiki article 1003)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra</a>
+</div>
+
+<p class="annotatable">The pipeline, manifests, and runbook all live in <a class="gh-repo" data-repo="infra"></a>. One workflow handles both environments: it triggers on a push to <code>main</code> <em>and</em> on a <code>v*</code> tag, and selects the environment from the git ref — a tag deploys to production, anything else deploys to staging.</p>
+
+<dl>
+  <dt>Workflow</dt><dd><code>.github/workflows/deploy.yml</code> — the three-job pipeline.</dd>
+  <dt>Runbook</dt><dd><code>runbooks/deploys.md</code> — how to watch a deploy and how to roll back.</dd>
+  <dt>Manifests</dt><dd><code>kubernetes/</code> — the Deployments and Services applied at deploy time.</dd>
+</dl>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">Merge to prod, and back out</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart TD
+  M["Merge to main"] --> T["CI: test<br/>(npm test)"]
+  T --> B["build-and-push<br/>image per service,<br/>tagged by commit SHA<br/>&rarr; ghcr.io/demo-co"]
+  B --> DS["deploy<br/>kubectl apply &rarr; eks-staging"]
+  DS --> SOAK["Staging soak<br/>~30 min (manual)"]
+  SOAK --> TAG["Tag v*<br/>(manual promote)"]
+  TAG --> DP["Same pipeline &rarr; eks-prod<br/>rolling deploy,<br/>/healthz gates traffic"]
+  DP -. "bad release?" .-> RB["kubectl rollout undo<br/>deploy/gateway"]
+  DP -. "bad tag?" .-> RT["re-tag last<br/>good commit"]
+  N["migrations (make migrate) run<br/>before the new image takes traffic"] -.-> DP</pre></div>
+</div>
+
+<h3 id="release-pipeline">The pipeline: three jobs</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+</div>
+
+<p class="annotatable">The jobs are chained with <code>needs</code>, so each only runs if the one before it passed. The same three jobs run for both staging and production — only the target cluster changes.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Job</th><th>Depends on</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>test</code></td><td>—</td><td><code>npm ci</code> then <code>npm test</code> across the platform workspaces on Node 20. A red build never deploys.</td></tr>
+    <tr><td><code>build-and-push</code></td><td><code>test</code></td><td>Loops over the services gateway, accounts, billing, usage, notifications; builds one image per service tagged with the commit SHA and pushes to <code>ghcr.io/demo-co/platform-&lt;svc&gt;</code>.</td></tr>
+    <tr><td><code>deploy</code></td><td><code>build-and-push</code></td><td>Points kubeconfig at <code>eks-&lt;env&gt;</code>, runs <code>kubectl apply -f kubernetes/</code>, then waits for the gateway rollout to be healthy.</td></tr>
+  </tbody>
+</table></div>
+
+<p class="annotatable">The image path is always <code>ghcr.io/demo-co/platform-&lt;svc&gt;:&lt;commit-sha&gt;</code> — one image per service, tagged by the commit that built it. The <code>test</code> job is the deploy half of the merge bar; see <a href="#testing">Testing</a>.</p>
+
+<div class="codeblock"><pre><code>aws eks update-kubeconfig --name eks-prod
+kubectl apply -f kubernetes/
+kubectl rollout status deploy/gateway --timeout=120s</code></pre></div>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">What the deploy job waits on</span>The deploy job waits on the gateway rollout (<code>deploy/gateway</code>, 120s timeout). Internal services are applied by the same <code>kubectl apply</code>, but the sources do not describe a rollout-wait for them — don't assume one.</div>
+</div>
+
+<h3 id="release-rollout">Rolling deploys and the health gate</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra</a>
+  <a data-kind="repo" href="https://github.com/demo-co/platform">platform</a>
+</div>
+
+<p class="annotatable">Kubernetes rolls pods one at a time. The readiness probe gates traffic to each new pod, so a bad image fails the rollout rather than taking the site down. The gateway runs <code>replicas: 3</code>, and its readiness probe is <code>GET /healthz</code> on port <code>3000</code>.</p>
+
+<ul>
+  <li><strong>The probe.</strong> The gateway implements <code>GET /healthz</code>, returning <code>{ ok: true }</code>; the manifest checks it with an <code>initialDelaySeconds</code> of 5.</li>
+  <li><strong>No auth on the probe.</strong> <code>/healthz</code> requires no session — that contract is owned by <a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a>.</li>
+  <li><strong>Bad image, contained.</strong> If new pods never go ready, traffic stays on the old pods and the rollout stalls instead of erroring out to customers.</li>
+</ul>
+
+<p class="annotatable">To watch a deploy land:</p>
+
+<div class="codeblock"><pre><code>aws eks update-kubeconfig --name eks-prod
+kubectl rollout status deploy/gateway
+kubectl get pods -l tier=internal</code></pre></div>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">SHA-to-manifest wiring is not documented</span>The pipeline pushes SHA-tagged images, while <code>kubernetes/gateway.yaml</code> references a <code>:latest</code> image tag. How <code>kubectl apply</code> resolves the commit SHA into the manifest at deploy time is not shown in the sources — treat the exact mechanism as unknown.</div>
+</div>
+
+<h3 id="release-rollback">Rollback and the rules</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">Release &amp; deployment (wiki article 1003)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra</a>
+</div>
+
+<p class="annotatable">Most incidents follow a deploy, so rolling back is the on-call's first lever — see <a href="#observability-and-on-call">Observability &amp; On-Call</a> and <a href="#incident-response">Incident Response &amp; Postmortems</a>. There are two ways to undo a release.</p>
+
+<dl>
+  <dt>Fastest path — roll the Deployment back</dt>
+  <dd>Run <code>kubectl rollout undo deploy/gateway</code>. This rolls the Deployment back to its previous ReplicaSet — effectively a one-click redeploy of the previous image tag.</dd>
+  <dt>Bad release tag — re-tag</dt>
+  <dd>Re-tag the last good commit and let the pipeline ship it through the same path it shipped the broken one.</dd>
+</dl>
+
+<div class="panel danger">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M6.7 2.75h6.6l4.95 4.95v6.6l-4.95 4.95H6.7L1.75 14.3V7.7L6.7 2.75Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 6.5v4.2M10 13.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Never hand-edit production</span>Don't fix production with <code>kubectl edit</code> — the next deploy overwrites it and the change is lost. All production change goes through git.</div>
+</div>
+
+<h3 id="release-migrations">Migrations in a release</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra</a>
+</div>
+
+<p class="annotatable">Schema changes are applied by <code>make migrate</code> as part of the release, before the new image takes traffic. Because pods roll one at a time, old pods briefly run against the new schema during the rollout — so every migration must be backward compatible.</p>
+
+<p class="annotatable">The mechanics — expand-then-contract across two deploys — are owned by <a href="#database-migrations">Database Migrations</a>. This section only states that migrations run as part of the release.</p>
+
+<h3 id="release-environments">Environments</h3>
+<div class="sources-data" hidden>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra</a>
+</div>
+
+<p class="annotatable">Two environments, one pipeline. Staging takes every merge to <code>main</code>; production takes a tagged release. Cluster sizing, Terraform, and manifest detail are owned by <a href="#infrastructure">Infrastructure &amp; Environments</a>.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Environment</th><th>Cluster</th><th>Database</th><th>Deployed from</th></tr></thead>
+  <tbody>
+    <tr><td>staging</td><td><code>eks-staging</code></td><td><code>rds-staging</code></td><td>Every merge to <code>main</code></td></tr>
+    <tr><td>production</td><td><code>eks-prod</code></td><td><code>rds-prod</code></td><td>A tagged <code>v*</code> release</td></tr>
+  </tbody>
+</table></div>

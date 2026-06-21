@@ -1,0 +1,16 @@
+{
+  "name": "demo-engineering-guide",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pal build",
+    "dev": "pal dev",
+    "preview": "pal dev",
+    "validate": "pal validate",
+    "publish": "pal publish"
+  },
+  "devDependencies": {
+    "palimpsest": "^0.1.0"
+  }
+}

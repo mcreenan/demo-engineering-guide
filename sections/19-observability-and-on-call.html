@@ -1,0 +1,124 @@
+<p class="lead annotatable">On-call keeps production healthy and is the first responder when it is not. The primary on-call is paged when the gateway 5xx rate exceeds 2% for 5 minutes, and escalates to the service owner if the incident is not resolved within 15 minutes.</p>
+
+<ul>
+  <li><strong>Trigger.</strong> Gateway 5xx rate &gt; 2% for 5 minutes pages the primary on-call.</li>
+  <li><strong>Escalate.</strong> Hand off to the service owner if it is not resolved within 15 minutes.</li>
+  <li><strong>Look at the gateway first.</strong> It is the single ingress, so most symptoms show up there.</li>
+  <li><strong>Check recent change.</strong> Most incidents follow a deploy &mdash; roll it back before deeper debugging.</li>
+</ul>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">This section owns paging and triage</span>The incident <em>process</em> &mdash; severity levels, the Incident Commander / Comms roles, and postmortems &mdash; lives in <a href="#incident-response">Incident Response &amp; Postmortems</a>. The two overlap on the first five minutes; once an incident is declared, that section takes over.</div>
+</div>
+
+<h3 id="oncall-paging">Paging &amp; escalation</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">On-call runbook (wiki article 1002)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra</a>
+</div>
+
+<p class="annotatable">The on-call signal is the gateway's error rate, because the gateway is the single public entrypoint for all traffic. When errors cross the threshold the primary on-call is paged; if the page is not resolved in time it escalates to the owner of the affected service.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Step</th><th>Condition</th><th>Action</th></tr></thead>
+  <tbody>
+    <tr><td>Page</td><td>Gateway 5xx rate &gt; 2% for 5 minutes</td><td>Primary on-call is paged; acknowledge it</td></tr>
+    <tr><td>Escalate</td><td>Not resolved within 15 minutes</td><td>Escalate to the service owner</td></tr>
+  </tbody>
+</table></div>
+
+<div class="panel info">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4.5M10 6.5v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Rotation &amp; contacts</span>The current on-call rotation and the escalation contacts (who the "service owner" is for each service) live on the engineering wiki "On-call" page &mdash; they are not duplicated here.</div>
+</div>
+
+<h3 id="oncall-triage">Triage runbook</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">On-call runbook (wiki article 1002)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra</a>
+</div>
+
+<p class="annotatable">Start at the gateway. It is the single ingress, so its dashboard and logs are the fastest way to see which route is failing and whether the problem is one service or the whole edge.</p>
+
+<ol>
+  <li><strong>Check the gateway dashboard.</strong> Find the failing route to narrow the blast radius.</li>
+  <li><strong>Restart a down service.</strong> If a single service is down, restart it with <code>kubectl rollout restart deploy/&lt;svc&gt;</code>.</li>
+  <li><strong>Shed read load.</strong> If Postgres is saturated, shed read load to the replica (see the note below).</li>
+</ol>
+
+<p class="annotatable">Reach for the gateway's pods and logs first. The on-call runbook uses these two commands:</p>
+
+<div class="codeblock"><pre><code><span class="cb-comment"># Look at the gateway first</span>
+kubectl get pods -l tier=edge
+kubectl logs -l app=gateway --tail=100</code></pre></div>
+
+<p class="annotatable">A restart or rollback will not black-hole traffic: the gateway's readiness probe is <code>/healthz</code> (no auth), and Kubernetes rolls pods one at a time, so a bad image fails the rollout rather than taking the site down.</p>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">The <code>tier=edge</code> selector is the runbook's command, not a pod label</span>In the gateway manifest the <code>tier: edge</code> label is on the Deployment metadata, while the pod template carries only <code>app: gateway</code>. The runbook lists <code>kubectl get pods -l tier=edge</code> verbatim, so use it as written but fall back to <code>app=gateway</code> if it returns nothing.</div>
+</div>
+
+<div class="canvas">
+  <div class="canvas-bar"><span class="canvas-title">On-call triage flow</span><div class="canvas-tools"></div></div>
+  <div class="canvas-stage"><pre class="mermaid">flowchart TD
+  P[Page: gateway 5xx &gt; 2%<br/>for 5 min] --> A[Acknowledge]
+  A --> D[Check gateway dashboard<br/>for failing route]
+  D --> R{Recent deploy?}
+  R -->|yes| RB[kubectl rollout undo<br/>roll back first]
+  R -->|no| S{Single service down?}
+  S -->|yes| SR[kubectl rollout restart<br/>deploy/&lt;svc&gt;]
+  S -->|no| PG{Postgres saturated?}
+  PG -->|yes| PGF[Shed read load to replica;<br/>check rds-prod in CloudWatch;<br/>pg_stat_activity by schema]
+  PG -->|no| CL{Service crash-looping<br/>on startup?}
+  CL -->|yes| SEC[Missing/rotated secret:<br/>kubectl describe pod]
+  RB --> E[Not resolved in 15 min:<br/>escalate to service owner]
+  SR --> E
+  PGF --> E
+  SEC --> E</pre></div>
+</div>
+
+<h3 id="oncall-causes">Common causes &amp; fixes</h3>
+<div class="sources-data" hidden>
+  <a data-kind="wiki">On-call runbook (wiki article 1002)</a>
+  <a data-kind="repo" href="https://github.com/demo-co/infra">infra</a>
+</div>
+
+<p class="annotatable">Most incidents fall into a few buckets. Match the symptom to a cause, apply the fix, and escalate if it does not resolve within 15 minutes.</p>
+
+<div class="table-wrapper"><table>
+  <thead><tr><th>Cause</th><th>Symptom</th><th>Fix</th></tr></thead>
+  <tbody>
+    <tr><td>Bad deploy</td><td>Errors started right after a deploy or while one is in flight</td><td>Roll back: <code>kubectl rollout undo</code> &mdash; resolves most Sev 1/2s</td></tr>
+    <tr><td>Database saturation</td><td>A slow query or connection leak in one service</td><td>Check <code>rds-prod</code> CPU and connections in CloudWatch; find the offending service by its schema in <code>pg_stat_activity</code></td></tr>
+    <tr><td>Expired / rotated secret</td><td>A service crash-looping on startup</td><td>Inspect with <code>kubectl describe pod</code> for a missing or rotated secret</td></tr>
+  </tbody>
+</table></div>
+
+<p class="annotatable">Postgres schema names map to services, so <code>pg_stat_activity</code> tells you who is generating the load. The schema names are the service names: accounts, billing, usage, or notifications. The services themselves live in <a class="gh-repo" data-repo="platform"></a>; the runbooks and Kubernetes manifests live in <a class="gh-repo" data-repo="infra"></a>.</p>
+
+<div class="panel tip">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 10.5 8.5 14 15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">Roll back first, debug second</span>The full rollback mechanics &mdash; <code>kubectl rollout undo deploy/gateway</code> and re-tagging the last good commit &mdash; are owned by <a href="#release-and-deployment">Release &amp; Deployment</a>. When a deploy is the suspect, roll it back before deeper investigation.</div>
+</div>
+
+<div class="panel warning">
+  <span class="panel-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3.5 17.5 16.5H2.5L10 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8.5v3.2M10 14v.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+  <div class="panel-body annotatable"><span class="panel-title">"Shed read load to the replica" is a runbook step, not a confirmed target</span>The on-call runbook lists shedding read load to a replica as a remediation, but no read replica is defined in the available Terraform, and the mechanism (how to shed load, the replica endpoint) is not documented in the sources. Treat it as the runbook's instruction and confirm the current setup before relying on it.</div>
+</div>
+
+<h3 id="oncall-references">Where this connects</h3>
+
+<dl>
+  <dt><a href="#incident-response">Incident Response &amp; Postmortems</a></dt>
+  <dd>The incident process once a page becomes a declared incident &mdash; severity, roles, and blameless postmortems.</dd>
+  <dt><a href="#release-and-deployment">Release &amp; Deployment</a></dt>
+  <dd>Rollback and pipeline mechanics, including the exact <code>kubectl rollout undo deploy/gateway</code> form.</dd>
+  <dt><a href="#infrastructure">Infrastructure &amp; Environments</a></dt>
+  <dd>EKS, <code>rds-prod</code>, CloudWatch, and the ALB ingress that the gateway sits behind.</dd>
+  <dt><a href="#gateway-and-request-flow">The Gateway &amp; Request Flow</a></dt>
+  <dd>Why the gateway is the single ingress and how the <code>/healthz</code> probe gates traffic.</dd>
+  <dt><a href="#security">Security &amp; Secrets</a></dt>
+  <dd>The secret rotation policy behind the "rotated or missing secret" failure mode.</dd>
+</dl>
